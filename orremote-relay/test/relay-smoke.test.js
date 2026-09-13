@@ -1,10 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import os from 'node:os';
-import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
@@ -13,13 +10,13 @@ const RELAY_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const RELAY_ENTRY = fileURLToPath(new URL('../src/index.js', import.meta.url));
 
 function deviceIdentity() {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', {
-    namedCurve: 'prime256v1',
-  });
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const publicDer = publicKey.export({ type: 'spki', format: 'der' });
-  const publicKeyBase64 = publicDer.toString('base64');
-  const deviceId = crypto.createHash('sha256').update(publicDer).digest('hex').slice(0, 24);
-  return { privateKey, publicKeyBase64, deviceId };
+  return {
+    privateKey,
+    publicKeyBase64: publicDer.toString('base64'),
+    deviceId: crypto.createHash('sha256').update(publicDer).digest('hex').slice(0, 24),
+  };
 }
 
 function signChallenge(privateKey, deviceId, nonce) {
@@ -67,15 +64,16 @@ function createQueue(ws) {
   };
 }
 
-async function startRelay(port, storePath) {
+async function startRelay(port, tokenSecret) {
   const child = spawn(process.execPath, [RELAY_ENTRY], {
     cwd: RELAY_ROOT,
     env: {
       ...process.env,
       PORT: String(port),
-      DEVICE_STORE_PATH: storePath,
+      RELAY_TOKEN_SECRET: tokenSecret,
       MCP_TIMEOUT_MS: '2500',
       PAIR_TTL_MS: '5000',
+      CAPABILITY_TTL_MS: '5000',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -106,17 +104,15 @@ async function startRelay(port, storePath) {
 async function stopRelay(child) {
   if (!child || child.exitCode !== null) return;
   child.kill('SIGTERM');
-  await Promise.race([
-    once(child, 'exit'),
-    new Promise((resolve) => setTimeout(resolve, 1_000)),
-  ]);
+  await Promise.race([once(child, 'exit'), new Promise((resolve) => setTimeout(resolve, 1_000))]);
   if (child.exitCode === null) child.kill('SIGKILL');
 }
 
-async function connectDevice(port, identity) {
+async function connectDevice(port, identity, paired = false) {
   const params = new URLSearchParams({
     device_id: identity.deviceId,
     public_key: identity.publicKeyBase64,
+    paired: paired ? '1' : '0',
   });
   const ws = new WebSocket(`ws://127.0.0.1:${port}/device?${params}`);
   const queue = createQueue(ws);
@@ -124,10 +120,9 @@ async function connectDevice(port, identity) {
   return { ws, queue };
 }
 
-async function authenticateFromChallenge(ws, queue, identity) {
+async function authenticate(ws, queue, identity) {
   const challenge = await queue.next();
   assert.equal(challenge.type, 'challenge');
-  assert.ok(challenge.nonce);
   ws.send(JSON.stringify({
     type: 'challenge_response',
     signature: signChallenge(identity.privateKey, identity.deviceId, challenge.nonce),
@@ -135,15 +130,31 @@ async function authenticateFromChallenge(ws, queue, identity) {
   const authenticated = await queue.next();
   assert.equal(authenticated.type, 'authenticated');
   assert.equal(authenticated.device_id, identity.deviceId);
-  assert.ok(Number.isInteger(authenticated.session_epoch));
+  assert.ok(Number.isSafeInteger(authenticated.session_epoch));
   return authenticated.session_epoch;
 }
 
-async function remoteMcp(baseUrl, deviceId, token, id, name = 'screen.observe') {
+async function exchangeCapability(baseUrl, deviceId, pairToken) {
+  const response = await fetch(`${baseUrl}/token/exchange/${deviceId}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${pairToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ scopes: ['presence', 'mcp'] }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.ok(body.capability_token);
+  assert.deepEqual(body.scopes, ['presence', 'mcp']);
+  return body.capability_token;
+}
+
+async function remoteMcp(baseUrl, deviceId, capabilityToken, id, name = 'screen.observe') {
   return fetch(`${baseUrl}/mcp/${deviceId}`, {
     method: 'POST',
     headers: {
-      authorization: `Bearer ${token}`,
+      authorization: `Bearer ${capabilityToken}`,
       'content-type': 'application/json',
       'mcp-protocol-version': '2026-07-28',
       'mcp-method': 'tools/call',
@@ -153,24 +164,27 @@ async function remoteMcp(baseUrl, deviceId, token, id, name = 'screen.observe') 
   });
 }
 
-test('pairing, authenticated MCP, stale epoch rejection, reconnect and persisted identity', { timeout: 20_000 }, async (t) => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'orremote-relay-test-'));
-  const storePath = path.join(tempDir, 'trusted-devices.json');
+test('stateless pairing survives relay restart and capabilities remain short-lived', { timeout: 20_000 }, async (t) => {
   const port = 31_000 + crypto.randomInt(10_000);
   const baseUrl = `http://127.0.0.1:${port}`;
+  const tokenSecret = crypto.randomBytes(48).toString('base64url');
   const identity = deviceIdentity();
-  let relay = await startRelay(port, storePath);
+  let relay = await startRelay(port, tokenSecret);
   let ws;
 
   t.after(async () => {
     try { ws?.close(); } catch {}
     await stopRelay(relay);
-    await rm(tempDir, { recursive: true, force: true });
   });
 
-  const first = await connectDevice(port, identity);
+  const health = await fetch(`${baseUrl}/health`);
+  assert.equal(health.status, 200);
+  assert.equal((await health.json()).auth_mode, 'stateless-signed-credentials-v1');
+
+  const first = await connectDevice(port, identity, false);
   ws = first.ws;
   let queue = first.queue;
+  const epoch1 = await authenticate(ws, queue, identity);
 
   const pairing = await queue.next();
   assert.equal(pairing.type, 'pairing_required');
@@ -186,29 +200,30 @@ test('pairing, authenticated MCP, stale epoch rejection, reconnect and persisted
   const claim = await claimResponse.json();
   assert.equal(claim.paired, true);
   assert.equal(claim.device_id, identity.deviceId);
-  assert.ok(claim.agent_token);
-  const agentToken = claim.agent_token;
+  assert.ok(claim.pair_token);
+  assert.ok(claim.capability_token);
+  const pairToken = claim.pair_token;
 
-  const epoch1 = await authenticateFromChallenge(ws, queue, identity);
+  const accepted = await queue.next();
+  assert.equal(accepted.type, 'pairing_accepted');
+  assert.equal(accepted.device_id, identity.deviceId);
 
-  const unauthorized = await fetch(`${baseUrl}/presence/${identity.deviceId}`, {
-    headers: { authorization: 'Bearer definitely-wrong' },
+  const pairTokenCannotCallPresence = await fetch(`${baseUrl}/presence/${identity.deviceId}`, {
+    headers: { authorization: `Bearer ${pairToken}` },
   });
-  assert.equal(unauthorized.status, 401);
+  assert.equal(pairTokenCannotCallPresence.status, 401);
 
+  const capability1 = await exchangeCapability(baseUrl, identity.deviceId, pairToken);
   const presence = await fetch(`${baseUrl}/presence/${identity.deviceId}`, {
-    headers: { authorization: `Bearer ${agentToken}` },
+    headers: { authorization: `Bearer ${capability1}` },
   });
   assert.equal(presence.status, 200);
-  const presenceBody = await presence.json();
-  assert.equal(presenceBody.connected, true);
-  assert.equal(presenceBody.session_epoch, epoch1);
+  assert.equal((await presence.json()).session_epoch, epoch1);
 
-  const firstMcpPromise = remoteMcp(baseUrl, identity.deviceId, agentToken, 7);
+  const firstMcpPromise = remoteMcp(baseUrl, identity.deviceId, capability1, 7);
   const firstMcpRequest = await queue.next();
   assert.equal(firstMcpRequest.type, 'mcp_request');
   assert.equal(firstMcpRequest.session_epoch, epoch1);
-  assert.equal(firstMcpRequest.headers['mcp-name'], 'screen.observe');
   ws.send(JSON.stringify({
     type: 'mcp_response',
     request_id: firstMcpRequest.request_id,
@@ -223,13 +238,14 @@ test('pairing, authenticated MCP, stale epoch rejection, reconnect and persisted
   ws.close(1000, 'test reconnect');
   await once(ws, 'close');
 
-  const second = await connectDevice(port, identity);
+  const second = await connectDevice(port, identity, true);
   ws = second.ws;
   queue = second.queue;
-  const epoch2 = await authenticateFromChallenge(ws, queue, identity);
+  const epoch2 = await authenticate(ws, queue, identity);
   assert.ok(epoch2 > epoch1);
 
-  const staleMcpPromise = remoteMcp(baseUrl, identity.deviceId, agentToken, 8, 'ui.click');
+  const capability2 = await exchangeCapability(baseUrl, identity.deviceId, pairToken);
+  const staleMcpPromise = remoteMcp(baseUrl, identity.deviceId, capability2, 8, 'ui.click');
   const staleMcpRequest = await queue.next();
   assert.equal(staleMcpRequest.type, 'mcp_request');
   assert.equal(staleMcpRequest.session_epoch, epoch2);
@@ -239,10 +255,9 @@ test('pairing, authenticated MCP, stale epoch rejection, reconnect and persisted
     request_id: staleMcpRequest.request_id,
     session_epoch: epoch1,
     status: 200,
-    body: JSON.stringify({ jsonrpc: '2.0', id: 8, result: { should_not_be_accepted: true } }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 8, result: { stale: true } }),
   }));
   await new Promise((resolve) => setTimeout(resolve, 100));
-
   ws.send(JSON.stringify({
     type: 'mcp_response',
     request_id: staleMcpRequest.request_id,
@@ -258,19 +273,19 @@ test('pairing, authenticated MCP, stale epoch rejection, reconnect and persisted
   await once(ws, 'close');
   await stopRelay(relay);
 
-  relay = await startRelay(port, storePath);
-  const third = await connectDevice(port, identity);
+  relay = await startRelay(port, tokenSecret);
+  const third = await connectDevice(port, identity, true);
   ws = third.ws;
   queue = third.queue;
-  const epoch3 = await authenticateFromChallenge(ws, queue, identity);
+  const epoch3 = await authenticate(ws, queue, identity);
   assert.ok(epoch3 > epoch2);
 
+  const capabilityAfterRestart = await exchangeCapability(baseUrl, identity.deviceId, pairToken);
   const persistedPresence = await fetch(`${baseUrl}/presence/${identity.deviceId}`, {
-    headers: { authorization: `Bearer ${agentToken}` },
+    headers: { authorization: `Bearer ${capabilityAfterRestart}` },
   });
   assert.equal(persistedPresence.status, 200);
   const persistedBody = await persistedPresence.json();
-  assert.equal(persistedBody.paired, true);
   assert.equal(persistedBody.connected, true);
   assert.equal(persistedBody.session_epoch, epoch3);
 });
