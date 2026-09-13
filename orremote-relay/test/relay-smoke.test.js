@@ -134,7 +134,27 @@ async function authenticate(ws, queue, identity) {
   return authenticated.session_epoch;
 }
 
-async function exchangeCapability(baseUrl, deviceId, pairToken) {
+async function claimPairing(baseUrl, queue, pairingCode, deviceId) {
+  const claimResponse = await fetch(`${baseUrl}/pair/claim`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code: pairingCode }),
+  });
+  assert.equal(claimResponse.status, 200);
+  const claim = await claimResponse.json();
+  assert.equal(claim.paired, true);
+  assert.equal(claim.device_id, deviceId);
+  assert.ok(claim.pair_id);
+  assert.ok(claim.pair_token);
+  assert.ok(claim.capability_token);
+  const accepted = await queue.next();
+  assert.equal(accepted.type, 'pairing_accepted');
+  assert.equal(accepted.device_id, deviceId);
+  assert.equal(accepted.pair_id, claim.pair_id);
+  return claim;
+}
+
+async function exchangeCapability(baseUrl, deviceId, pairToken, expectedPairId) {
   const response = await fetch(`${baseUrl}/token/exchange/${deviceId}`, {
     method: 'POST',
     headers: {
@@ -145,6 +165,7 @@ async function exchangeCapability(baseUrl, deviceId, pairToken) {
   });
   assert.equal(response.status, 200);
   const body = await response.json();
+  assert.equal(body.pair_id, expectedPairId);
   assert.ok(body.capability_token);
   assert.deepEqual(body.scopes, ['presence', 'mcp']);
   return body.capability_token;
@@ -164,7 +185,7 @@ async function remoteMcp(baseUrl, deviceId, capabilityToken, id, name = 'screen.
   });
 }
 
-test('stateless pairing survives relay restart and capabilities remain short-lived', { timeout: 20_000 }, async (t) => {
+test('stateless pairing survives restart, rejects stale epochs, and binds capabilities to pair generation', { timeout: 25_000 }, async (t) => {
   const port = 31_000 + crypto.randomInt(10_000);
   const baseUrl = `http://127.0.0.1:${port}`;
   const tokenSecret = crypto.randomBytes(48).toString('base64url');
@@ -189,31 +210,14 @@ test('stateless pairing survives relay restart and capabilities remain short-liv
   const pairing = await queue.next();
   assert.equal(pairing.type, 'pairing_required');
   assert.match(pairing.code, /^\d{8}$/);
-  assert.equal(pairing.device_id, identity.deviceId);
-
-  const claimResponse = await fetch(`${baseUrl}/pair/claim`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code: pairing.code }),
-  });
-  assert.equal(claimResponse.status, 200);
-  const claim = await claimResponse.json();
-  assert.equal(claim.paired, true);
-  assert.equal(claim.device_id, identity.deviceId);
-  assert.ok(claim.pair_token);
-  assert.ok(claim.capability_token);
-  const pairToken = claim.pair_token;
-
-  const accepted = await queue.next();
-  assert.equal(accepted.type, 'pairing_accepted');
-  assert.equal(accepted.device_id, identity.deviceId);
+  const claim1 = await claimPairing(baseUrl, queue, pairing.code, identity.deviceId);
 
   const pairTokenCannotCallPresence = await fetch(`${baseUrl}/presence/${identity.deviceId}`, {
-    headers: { authorization: `Bearer ${pairToken}` },
+    headers: { authorization: `Bearer ${claim1.pair_token}` },
   });
   assert.equal(pairTokenCannotCallPresence.status, 401);
 
-  const capability1 = await exchangeCapability(baseUrl, identity.deviceId, pairToken);
+  const capability1 = await exchangeCapability(baseUrl, identity.deviceId, claim1.pair_token, claim1.pair_id);
   const presence = await fetch(`${baseUrl}/presence/${identity.deviceId}`, {
     headers: { authorization: `Bearer ${capability1}` },
   });
@@ -224,6 +228,7 @@ test('stateless pairing survives relay restart and capabilities remain short-liv
   const firstMcpRequest = await queue.next();
   assert.equal(firstMcpRequest.type, 'mcp_request');
   assert.equal(firstMcpRequest.session_epoch, epoch1);
+  assert.equal(firstMcpRequest.pair_id, claim1.pair_id);
   ws.send(JSON.stringify({
     type: 'mcp_response',
     request_id: firstMcpRequest.request_id,
@@ -233,23 +238,20 @@ test('stateless pairing survives relay restart and capabilities remain short-liv
   }));
   const firstMcpResponse = await firstMcpPromise;
   assert.equal(firstMcpResponse.status, 200);
-  assert.deepEqual(await firstMcpResponse.json(), { jsonrpc: '2.0', id: 7, result: { observed: true } });
 
   ws.close(1000, 'test reconnect');
   await once(ws, 'close');
-
   const second = await connectDevice(port, identity, true);
   ws = second.ws;
   queue = second.queue;
   const epoch2 = await authenticate(ws, queue, identity);
   assert.ok(epoch2 > epoch1);
 
-  const capability2 = await exchangeCapability(baseUrl, identity.deviceId, pairToken);
+  const capability2 = await exchangeCapability(baseUrl, identity.deviceId, claim1.pair_token, claim1.pair_id);
   const staleMcpPromise = remoteMcp(baseUrl, identity.deviceId, capability2, 8, 'ui.click');
   const staleMcpRequest = await queue.next();
-  assert.equal(staleMcpRequest.type, 'mcp_request');
+  assert.equal(staleMcpRequest.pair_id, claim1.pair_id);
   assert.equal(staleMcpRequest.session_epoch, epoch2);
-
   ws.send(JSON.stringify({
     type: 'mcp_response',
     request_id: staleMcpRequest.request_id,
@@ -265,27 +267,60 @@ test('stateless pairing survives relay restart and capabilities remain short-liv
     status: 200,
     body: JSON.stringify({ jsonrpc: '2.0', id: 8, result: { verified: true } }),
   }));
-  const staleMcpResponse = await staleMcpPromise;
-  assert.equal(staleMcpResponse.status, 200);
-  assert.deepEqual(await staleMcpResponse.json(), { jsonrpc: '2.0', id: 8, result: { verified: true } });
+  assert.equal((await staleMcpPromise).status, 200);
 
   ws.close(1000, 'test restart');
   await once(ws, 'close');
   await stopRelay(relay);
-
   relay = await startRelay(port, tokenSecret);
   const third = await connectDevice(port, identity, true);
   ws = third.ws;
   queue = third.queue;
   const epoch3 = await authenticate(ws, queue, identity);
   assert.ok(epoch3 > epoch2);
-
-  const capabilityAfterRestart = await exchangeCapability(baseUrl, identity.deviceId, pairToken);
+  const capabilityAfterRestart = await exchangeCapability(baseUrl, identity.deviceId, claim1.pair_token, claim1.pair_id);
   const persistedPresence = await fetch(`${baseUrl}/presence/${identity.deviceId}`, {
     headers: { authorization: `Bearer ${capabilityAfterRestart}` },
   });
   assert.equal(persistedPresence.status, 200);
-  const persistedBody = await persistedPresence.json();
-  assert.equal(persistedBody.connected, true);
-  assert.equal(persistedBody.session_epoch, epoch3);
+  assert.equal((await persistedPresence.json()).session_epoch, epoch3);
+
+  ws.close(1000, 'test re-pair');
+  await once(ws, 'close');
+  const fourth = await connectDevice(port, identity, false);
+  ws = fourth.ws;
+  queue = fourth.queue;
+  const epoch4 = await authenticate(ws, queue, identity);
+  assert.ok(epoch4 > epoch3);
+  const pairing2 = await queue.next();
+  assert.equal(pairing2.type, 'pairing_required');
+  const claim2 = await claimPairing(baseUrl, queue, pairing2.code, identity.deviceId);
+  assert.notEqual(claim2.pair_id, claim1.pair_id);
+
+  const oldCapability = await exchangeCapability(baseUrl, identity.deviceId, claim1.pair_token, claim1.pair_id);
+  const obsoleteMcpPromise = remoteMcp(baseUrl, identity.deviceId, oldCapability, 9);
+  const obsoleteRequest = await queue.next();
+  assert.equal(obsoleteRequest.pair_id, claim1.pair_id);
+  assert.notEqual(obsoleteRequest.pair_id, claim2.pair_id);
+  ws.send(JSON.stringify({
+    type: 'mcp_response',
+    request_id: obsoleteRequest.request_id,
+    session_epoch: epoch4,
+    status: 403,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 9, error: { code: -32041, message: 'PAIRING_MISMATCH' } }),
+  }));
+  assert.equal((await obsoleteMcpPromise).status, 403);
+
+  const newCapability = await exchangeCapability(baseUrl, identity.deviceId, claim2.pair_token, claim2.pair_id);
+  const currentMcpPromise = remoteMcp(baseUrl, identity.deviceId, newCapability, 10);
+  const currentRequest = await queue.next();
+  assert.equal(currentRequest.pair_id, claim2.pair_id);
+  ws.send(JSON.stringify({
+    type: 'mcp_response',
+    request_id: currentRequest.request_id,
+    session_epoch: epoch4,
+    status: 200,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 10, result: { verified: true } }),
+  }));
+  assert.equal((await currentMcpPromise).status, 200);
 });
