@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
-  "scripts": { "start": "node src/index.js", "check": "node --check src/index.js" },
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check test/relay-smoke.test.js",
+    "test": "node --test test/*.test.js",
+    "postinstall": "npm run check && npm test"
+  },
   "dependencies": { "ws": "^8.18.3" }
 }
