@@ -1,38 +1,27 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
-const STORE_PATH = process.env.DEVICE_STORE_PATH || path.join(process.cwd(), 'data', 'trusted-devices.json');
 const MCP_TIMEOUT_MS = Number(process.env.MCP_TIMEOUT_MS || 15000);
 const PAIR_TTL_MS = Number(process.env.PAIR_TTL_MS || 10 * 60 * 1000);
+const PAIR_CREDENTIAL_TTL_MS = Number(process.env.PAIR_CREDENTIAL_TTL_MS || 365 * 24 * 60 * 60 * 1000);
+const CAPABILITY_TTL_MS = Number(process.env.CAPABILITY_TTL_MS || 10 * 60 * 1000);
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 1024 * 1024);
 const PAIR_ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
 const MAX_PAIR_ATTEMPTS_PER_IP = 8;
+const RELAY_TOKEN_SECRET = String(process.env.RELAY_TOKEN_SECRET || '');
 
-const trustedDevices = loadTrustedDevices();
+if (Buffer.byteLength(RELAY_TOKEN_SECRET, 'utf8') < 32) {
+  throw new Error('RELAY_TOKEN_SECRET must be configured with at least 32 bytes');
+}
+
 const pairingByCode = new Map();
 const connectedDevices = new Map();
 const pendingMcp = new Map();
 const pairAttempts = new Map();
-
-function loadTrustedDevices() {
-  try {
-    return new Map(Object.entries(JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'))));
-  } catch {
-    return new Map();
-  }
-}
-
-function persistTrustedDevices() {
-  fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-  const tmp = `${STORE_PATH}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(trustedDevices), null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, STORE_PATH);
-}
+const lastEpochByDevice = new Map();
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -44,18 +33,8 @@ function json(res, status, payload) {
   res.end(body);
 }
 
-function tokenHash(token) {
-  return crypto.createHash('sha256').update(String(token), 'utf8').digest('hex');
-}
-
-function hasDeviceAuth(req, deviceId) {
-  const record = trustedDevices.get(deviceId);
-  if (!record?.agentTokenHash) return false;
-  const value = req.headers.authorization || '';
-  if (!value.startsWith('Bearer ')) return false;
-  const provided = Buffer.from(tokenHash(value.slice(7)));
-  const expected = Buffer.from(String(record.agentTokenHash));
-  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+function unauthorized(res) {
+  json(res, 401, { error: 'UNAUTHORIZED' });
 }
 
 function clientIp(req) {
@@ -92,7 +71,8 @@ async function readBody(req) {
 }
 
 function deviceIdFromPublicKey(publicKeyDerBase64) {
-  return crypto.createHash('sha256').update(Buffer.from(publicKeyDerBase64, 'base64')).digest('hex').slice(0, 24);
+  const der = Buffer.from(publicKeyDerBase64, 'base64');
+  return crypto.createHash('sha256').update(der).digest('hex').slice(0, 24);
 }
 
 function createPairCode() {
@@ -106,10 +86,7 @@ function createPairCode() {
 function cleanupExpiredPairs() {
   const now = Date.now();
   for (const [code, value] of pairingByCode.entries()) {
-    if (value.expiresAt <= now) {
-      pairingByCode.delete(code);
-      try { value.ws.close(4003, 'pairing expired'); } catch {}
-    }
+    if (value.expiresAt <= now) pairingByCode.delete(code);
   }
   for (const [ip, value] of pairAttempts.entries()) {
     if (value.resetAt <= now) pairAttempts.delete(ip);
@@ -139,12 +116,85 @@ function cancelPendingForDevice(deviceId, reason = 'DEVICE_DISCONNECTED') {
   }
 }
 
+function nextSessionEpoch(deviceId) {
+  const wallClock = Date.now() * 1000 + crypto.randomInt(1000);
+  const previous = Number(lastEpochByDevice.get(deviceId) || 0);
+  const next = Math.max(wallClock, previous + 1);
+  lastEpochByDevice.set(deviceId, next);
+  return next;
+}
+
+function encodeCredential(payload) {
+  const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = crypto.createHmac('sha256', RELAY_TOKEN_SECRET).update(body, 'utf8').digest('base64url');
+  return `${body}.${signature}`;
+}
+
+function createCredential(deviceId, kind, ttlMs, scopes) {
+  const now = Date.now();
+  return encodeCredential({
+    v: 1,
+    kind,
+    device_id: deviceId,
+    scopes,
+    iat: Math.floor(now / 1000),
+    exp: Math.floor((now + ttlMs) / 1000),
+    jti: crypto.randomBytes(16).toString('base64url'),
+  });
+}
+
+function verifyCredential(token, deviceId, kind, requiredScope = null) {
+  const [body, signature, extra] = String(token || '').split('.');
+  if (!body || !signature || extra !== undefined) return null;
+  const expected = crypto.createHmac('sha256', RELAY_TOKEN_SECRET).update(body, 'utf8').digest('base64url');
+  const providedBuffer = Buffer.from(signature, 'utf8');
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  if (providedBuffer.length !== expectedBuffer.length) return null;
+  if (!crypto.timingSafeEqual(providedBuffer, expectedBuffer)) return null;
+
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (payload?.v !== 1) return null;
+  if (payload?.kind !== kind) return null;
+  if (payload?.device_id !== deviceId) return null;
+  if (!Number.isInteger(payload?.iat) || payload.iat > nowSeconds + 60) return null;
+  if (!Number.isInteger(payload?.exp) || payload.exp <= nowSeconds) return null;
+  if (!Array.isArray(payload?.scopes)) return null;
+  if (requiredScope && !payload.scopes.includes(requiredScope)) return null;
+  return payload;
+}
+
+function bearerToken(req) {
+  const value = String(req.headers.authorization || '');
+  return value.startsWith('Bearer ') ? value.slice(7) : '';
+}
+
+function hasCapabilityAuth(req, deviceId, scope) {
+  return Boolean(verifyCredential(bearerToken(req), deviceId, 'capability', scope));
+}
+
+function hasPairAuth(req, deviceId) {
+  return Boolean(verifyCredential(bearerToken(req), deviceId, 'pair', 'exchange'));
+}
+
+function createCapabilityToken(deviceId, scopes = ['presence', 'mcp']) {
+  return createCredential(deviceId, 'capability', CAPABILITY_TTL_MS, scopes);
+}
+
+function createPairCredential(deviceId) {
+  return createCredential(deviceId, 'pair', PAIR_CREDENTIAL_TTL_MS, ['exchange']);
+}
+
 function authenticateSocket(ws, signatureBase64) {
   const state = ws.orremote;
-  const record = trustedDevices.get(state.deviceId);
-  if (!record || record.publicKey !== state.publicKey || !state.challenge) return false;
-
-  const canonical = `orremote-m3|${state.deviceId}|${state.challenge}`;
+  const nonce = state.challenge;
+  if (!nonce) return false;
+  const canonical = `orremote-m3|${state.deviceId}|${nonce}`;
   let valid = false;
   try {
     valid = crypto.verify(
@@ -153,7 +203,9 @@ function authenticateSocket(ws, signatureBase64) {
       publicKeyObject(state.publicKey),
       Buffer.from(signatureBase64, 'base64'),
     );
-  } catch {}
+  } catch {
+    valid = false;
+  }
   if (!valid) return false;
 
   const previous = connectedDevices.get(state.deviceId);
@@ -162,16 +214,33 @@ function authenticateSocket(ws, signatureBase64) {
     try { previous.ws.close(4000, 'superseded by new session'); } catch {}
   }
 
-  const nextEpoch = Number(record.lastEpoch || 0) + 1;
-  record.lastEpoch = nextEpoch;
-  trustedDevices.set(state.deviceId, record);
-  persistTrustedDevices();
-
+  const nextEpoch = nextSessionEpoch(state.deviceId);
   state.authenticated = true;
   state.sessionEpoch = nextEpoch;
   state.challenge = null;
   connectedDevices.set(state.deviceId, { ws, epoch: nextEpoch, connectedAt: Date.now() });
-  ws.send(JSON.stringify({ type: 'authenticated', device_id: state.deviceId, session_epoch: nextEpoch }));
+  ws.send(JSON.stringify({
+    type: 'authenticated',
+    device_id: state.deviceId,
+    session_epoch: nextEpoch,
+  }));
+
+  if (!state.pairedHint) {
+    cleanupExpiredPairs();
+    const code = createPairCode();
+    pairingByCode.set(code, {
+      deviceId: state.deviceId,
+      publicKey: state.publicKey,
+      ws,
+      expiresAt: Date.now() + PAIR_TTL_MS,
+    });
+    ws.send(JSON.stringify({
+      type: 'pairing_required',
+      code,
+      expires_in_seconds: Math.floor(PAIR_TTL_MS / 1000),
+      device_id: state.deviceId,
+    }));
+  }
   return true;
 }
 
@@ -183,10 +252,12 @@ function handleDeviceMessage(ws, raw) {
     ws.close(4002, 'invalid json');
     return;
   }
-
   const state = ws.orremote;
+
   if (message.type === 'challenge_response') {
-    if (!authenticateSocket(ws, String(message.signature || ''))) ws.close(4001, 'authentication failed');
+    if (!authenticateSocket(ws, String(message.signature || ''))) {
+      ws.close(4001, 'authentication failed');
+    }
     return;
   }
 
@@ -201,7 +272,6 @@ function handleDeviceMessage(ws, raw) {
     if (!pending) return;
     if (pending.deviceId !== state.deviceId || pending.epoch !== state.sessionEpoch) return;
     if (Number(message.session_epoch) !== state.sessionEpoch) return;
-
     clearTimeout(pending.timer);
     pendingMcp.delete(requestId);
     const body = typeof message.body === 'string' ? message.body : JSON.stringify(message.body ?? {});
@@ -213,9 +283,7 @@ function handleDeviceMessage(ws, raw) {
     return;
   }
 
-  if (message.type === 'ping') {
-    ws.send(JSON.stringify({ type: 'pong', at: Date.now() }));
-  }
+  if (message.type === 'pong') return;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -226,8 +294,10 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, {
         ok: true,
         service: 'orremote-relay',
+        auth_mode: 'stateless-signed-credentials-v1',
         connected_devices: connectedDevices.size,
-        paired_devices: trustedDevices.size,
+        pending_pairs: pairingByCode.size,
+        capability_ttl_seconds: Math.floor(CAPABILITY_TTL_MS / 1000),
       });
       return;
     }
@@ -238,64 +308,89 @@ const server = http.createServer(async (req, res) => {
         json(res, 429, { error: 'PAIR_RATE_LIMITED' });
         return;
       }
-
-      const input = JSON.parse(await readBody(req) || '{}');
-      const code = String(input.code || '');
+      const body = JSON.parse(await readBody(req) || '{}');
+      const code = String(body.code || '');
       const pending = pairingByCode.get(code);
       if (!pending || pending.expiresAt <= Date.now()) {
         json(res, 404, { error: 'PAIR_CODE_NOT_FOUND' });
         return;
       }
-
       pairingByCode.delete(code);
-      const agentToken = crypto.randomBytes(32).toString('base64url');
-      trustedDevices.set(pending.deviceId, {
-        publicKey: pending.publicKey,
-        agentTokenHash: tokenHash(agentToken),
-        lastEpoch: 0,
-        pairedAt: new Date().toISOString(),
+
+      const pairToken = createPairCredential(pending.deviceId);
+      const capabilityToken = createCapabilityToken(pending.deviceId);
+      if (pending.ws.readyState === WebSocket.OPEN) {
+        pending.ws.orremote.pairedHint = true;
+        pending.ws.send(JSON.stringify({
+          type: 'pairing_accepted',
+          device_id: pending.deviceId,
+          session_epoch: pending.ws.orremote.sessionEpoch,
+        }));
+      }
+      json(res, 200, {
+        paired: true,
+        device_id: pending.deviceId,
+        pair_token: pairToken,
+        pair_token_expires_in_seconds: Math.floor(PAIR_CREDENTIAL_TTL_MS / 1000),
+        capability_token: capabilityToken,
+        capability_expires_in_seconds: Math.floor(CAPABILITY_TTL_MS / 1000),
       });
-      persistTrustedDevices();
-      if (pending.ws.readyState === WebSocket.OPEN) beginChallenge(pending.ws);
-      json(res, 200, { paired: true, device_id: pending.deviceId, agent_token: agentToken });
       return;
     }
 
-    let match = url.pathname.match(/^\/presence\/([a-f0-9]{24})$/);
-    if (req.method === 'GET' && match) {
-      const deviceId = match[1];
-      if (!hasDeviceAuth(req, deviceId)) {
-        json(res, 401, { error: 'UNAUTHORIZED' });
-        return;
+    const exchangeMatch = url.pathname.match(/^\/token\/exchange\/([a-f0-9]{24})$/);
+    if (req.method === 'POST' && exchangeMatch) {
+      const deviceId = exchangeMatch[1];
+      if (!hasPairAuth(req, deviceId)) return unauthorized(res);
+      let requestedScopes = ['presence', 'mcp'];
+      const rawBody = await readBody(req);
+      if (rawBody.trim()) {
+        const body = JSON.parse(rawBody);
+        if (Array.isArray(body.scopes)) {
+          const allowed = new Set(['presence', 'mcp']);
+          requestedScopes = body.scopes.filter((scope) => allowed.has(scope));
+          if (!requestedScopes.length) {
+            json(res, 400, { error: 'NO_ALLOWED_SCOPES' });
+            return;
+          }
+        }
       }
+      json(res, 200, {
+        device_id: deviceId,
+        capability_token: createCapabilityToken(deviceId, requestedScopes),
+        scopes: requestedScopes,
+        expires_in_seconds: Math.floor(CAPABILITY_TTL_MS / 1000),
+      });
+      return;
+    }
+
+    const presenceMatch = url.pathname.match(/^\/presence\/([a-f0-9]{24})$/);
+    if (req.method === 'GET' && presenceMatch) {
+      const deviceId = presenceMatch[1];
+      if (!hasCapabilityAuth(req, deviceId, 'presence')) return unauthorized(res);
       const connected = connectedDevices.get(deviceId);
       json(res, 200, {
         device_id: deviceId,
-        paired: trustedDevices.has(deviceId),
         connected: Boolean(connected),
         session_epoch: connected?.epoch ?? null,
       });
       return;
     }
 
-    match = url.pathname.match(/^\/mcp\/([a-f0-9]{24})$/);
-    if (req.method === 'POST' && match) {
-      const deviceId = match[1];
-      if (!hasDeviceAuth(req, deviceId)) {
-        json(res, 401, { error: 'UNAUTHORIZED' });
-        return;
-      }
-
+    const mcpMatch = url.pathname.match(/^\/mcp\/([a-f0-9]{24})$/);
+    if (req.method === 'POST' && mcpMatch) {
+      const deviceId = mcpMatch[1];
+      if (!hasCapabilityAuth(req, deviceId, 'mcp')) return unauthorized(res);
       const connection = connectedDevices.get(deviceId);
       if (!connection || connection.ws.readyState !== WebSocket.OPEN) {
         json(res, 503, { error: 'DEVICE_OFFLINE' });
         return;
       }
 
-      const requestBody = await readBody(req);
+      const body = await readBody(req);
       const requestId = crypto.randomUUID();
       const epoch = connection.epoch;
-      const headers = {
+      const forwardedHeaders = {
         'mcp-protocol-version': req.headers['mcp-protocol-version'] || '',
         'mcp-method': req.headers['mcp-method'] || '',
         'mcp-name': req.headers['mcp-name'] || '',
@@ -303,7 +398,8 @@ const server = http.createServer(async (req, res) => {
       };
 
       const timer = setTimeout(() => {
-        if (!pendingMcp.has(requestId)) return;
+        const pending = pendingMcp.get(requestId);
+        if (!pending) return;
         pendingMcp.delete(requestId);
         json(res, 504, { error: 'DEVICE_TIMEOUT' });
       }, MCP_TIMEOUT_MS);
@@ -313,8 +409,8 @@ const server = http.createServer(async (req, res) => {
         type: 'mcp_request',
         request_id: requestId,
         session_epoch: epoch,
-        headers,
-        body: requestBody,
+        headers: forwardedHeaders,
+        body,
       }));
       return;
     }
@@ -325,7 +421,7 @@ const server = http.createServer(async (req, res) => {
       json(res, 413, { error: 'BODY_TOO_LARGE' });
       return;
     }
-    console.error(error);
+    console.error('request failed', error);
     json(res, 500, { error: 'INTERNAL_ERROR' });
   }
 });
@@ -344,9 +440,9 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
-
   const deviceId = String(url.searchParams.get('device_id') || '');
   const publicKey = String(url.searchParams.get('public_key') || '');
+  const pairedHint = url.searchParams.get('paired') === '1';
   if (!/^[a-f0-9]{24}$/.test(deviceId) || !publicKey || deviceIdFromPublicKey(publicKey) !== deviceId) {
     socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
     socket.destroy();
@@ -354,37 +450,21 @@ server.on('upgrade', (req, socket, head) => {
   }
 
   wss.handleUpgrade(req, socket, head, (ws) => {
-    ws.orremote = { deviceId, publicKey, authenticated: false, sessionEpoch: null, challenge: null };
+    ws.orremote = {
+      deviceId,
+      publicKey,
+      pairedHint,
+      authenticated: false,
+      sessionEpoch: null,
+      challenge: null,
+    };
     wss.emit('connection', ws, req);
   });
 });
 
 wss.on('connection', (ws) => {
   const state = ws.orremote;
-  const trusted = trustedDevices.get(state.deviceId);
-
-  if (trusted) {
-    if (trusted.publicKey !== state.publicKey) {
-      ws.close(4001, 'public key mismatch');
-      return;
-    }
-    beginChallenge(ws);
-  } else {
-    cleanupExpiredPairs();
-    const code = createPairCode();
-    pairingByCode.set(code, {
-      deviceId: state.deviceId,
-      publicKey: state.publicKey,
-      ws,
-      expiresAt: Date.now() + PAIR_TTL_MS,
-    });
-    ws.send(JSON.stringify({
-      type: 'pairing_required',
-      code,
-      expires_in_seconds: Math.floor(PAIR_TTL_MS / 1000),
-      device_id: state.deviceId,
-    }));
-  }
+  beginChallenge(ws);
 
   ws.on('message', (raw) => handleDeviceMessage(ws, raw));
   ws.on('close', () => {
