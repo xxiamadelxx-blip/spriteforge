@@ -130,12 +130,13 @@ function encodeCredential(payload) {
   return `${body}.${signature}`;
 }
 
-function createCredential(deviceId, kind, ttlMs, scopes) {
+function createCredential(deviceId, kind, ttlMs, scopes, pairId) {
   const now = Date.now();
   return encodeCredential({
     v: 1,
     kind,
     device_id: deviceId,
+    pair_id: pairId,
     scopes,
     iat: Math.floor(now / 1000),
     exp: Math.floor((now + ttlMs) / 1000),
@@ -162,6 +163,7 @@ function verifyCredential(token, deviceId, kind, requiredScope = null) {
   if (payload?.v !== 1) return null;
   if (payload?.kind !== kind) return null;
   if (payload?.device_id !== deviceId) return null;
+  if (typeof payload?.pair_id !== 'string' || payload.pair_id.length < 16) return null;
   if (!Number.isInteger(payload?.iat) || payload.iat > nowSeconds + 60) return null;
   if (!Number.isInteger(payload?.exp) || payload.exp <= nowSeconds) return null;
   if (!Array.isArray(payload?.scopes)) return null;
@@ -174,20 +176,20 @@ function bearerToken(req) {
   return value.startsWith('Bearer ') ? value.slice(7) : '';
 }
 
-function hasCapabilityAuth(req, deviceId, scope) {
-  return Boolean(verifyCredential(bearerToken(req), deviceId, 'capability', scope));
+function capabilityAuth(req, deviceId, scope) {
+  return verifyCredential(bearerToken(req), deviceId, 'capability', scope);
 }
 
-function hasPairAuth(req, deviceId) {
-  return Boolean(verifyCredential(bearerToken(req), deviceId, 'pair', 'exchange'));
+function pairAuth(req, deviceId) {
+  return verifyCredential(bearerToken(req), deviceId, 'pair', 'exchange');
 }
 
-function createCapabilityToken(deviceId, scopes = ['presence', 'mcp']) {
-  return createCredential(deviceId, 'capability', CAPABILITY_TTL_MS, scopes);
+function createCapabilityToken(deviceId, pairId, scopes = ['presence', 'mcp']) {
+  return createCredential(deviceId, 'capability', CAPABILITY_TTL_MS, scopes, pairId);
 }
 
-function createPairCredential(deviceId) {
-  return createCredential(deviceId, 'pair', PAIR_CREDENTIAL_TTL_MS, ['exchange']);
+function createPairCredential(deviceId, pairId) {
+  return createCredential(deviceId, 'pair', PAIR_CREDENTIAL_TTL_MS, ['exchange'], pairId);
 }
 
 function authenticateSocket(ws, signatureBase64) {
@@ -317,19 +319,22 @@ const server = http.createServer(async (req, res) => {
       }
       pairingByCode.delete(code);
 
-      const pairToken = createPairCredential(pending.deviceId);
-      const capabilityToken = createCapabilityToken(pending.deviceId);
+      const pairId = crypto.randomBytes(16).toString('base64url');
+      const pairToken = createPairCredential(pending.deviceId, pairId);
+      const capabilityToken = createCapabilityToken(pending.deviceId, pairId);
       if (pending.ws.readyState === WebSocket.OPEN) {
         pending.ws.orremote.pairedHint = true;
         pending.ws.send(JSON.stringify({
           type: 'pairing_accepted',
           device_id: pending.deviceId,
+          pair_id: pairId,
           session_epoch: pending.ws.orremote.sessionEpoch,
         }));
       }
       json(res, 200, {
         paired: true,
         device_id: pending.deviceId,
+        pair_id: pairId,
         pair_token: pairToken,
         pair_token_expires_in_seconds: Math.floor(PAIR_CREDENTIAL_TTL_MS / 1000),
         capability_token: capabilityToken,
@@ -341,7 +346,8 @@ const server = http.createServer(async (req, res) => {
     const exchangeMatch = url.pathname.match(/^\/token\/exchange\/([a-f0-9]{24})$/);
     if (req.method === 'POST' && exchangeMatch) {
       const deviceId = exchangeMatch[1];
-      if (!hasPairAuth(req, deviceId)) return unauthorized(res);
+      const pairCredential = pairAuth(req, deviceId);
+      if (!pairCredential) return unauthorized(res);
       let requestedScopes = ['presence', 'mcp'];
       const rawBody = await readBody(req);
       if (rawBody.trim()) {
@@ -357,7 +363,8 @@ const server = http.createServer(async (req, res) => {
       }
       json(res, 200, {
         device_id: deviceId,
-        capability_token: createCapabilityToken(deviceId, requestedScopes),
+        pair_id: pairCredential.pair_id,
+        capability_token: createCapabilityToken(deviceId, pairCredential.pair_id, requestedScopes),
         scopes: requestedScopes,
         expires_in_seconds: Math.floor(CAPABILITY_TTL_MS / 1000),
       });
@@ -367,7 +374,7 @@ const server = http.createServer(async (req, res) => {
     const presenceMatch = url.pathname.match(/^\/presence\/([a-f0-9]{24})$/);
     if (req.method === 'GET' && presenceMatch) {
       const deviceId = presenceMatch[1];
-      if (!hasCapabilityAuth(req, deviceId, 'presence')) return unauthorized(res);
+      if (!capabilityAuth(req, deviceId, 'presence')) return unauthorized(res);
       const connected = connectedDevices.get(deviceId);
       json(res, 200, {
         device_id: deviceId,
@@ -380,7 +387,8 @@ const server = http.createServer(async (req, res) => {
     const mcpMatch = url.pathname.match(/^\/mcp\/([a-f0-9]{24})$/);
     if (req.method === 'POST' && mcpMatch) {
       const deviceId = mcpMatch[1];
-      if (!hasCapabilityAuth(req, deviceId, 'mcp')) return unauthorized(res);
+      const capability = capabilityAuth(req, deviceId, 'mcp');
+      if (!capability) return unauthorized(res);
       const connection = connectedDevices.get(deviceId);
       if (!connection || connection.ws.readyState !== WebSocket.OPEN) {
         json(res, 503, { error: 'DEVICE_OFFLINE' });
@@ -409,6 +417,7 @@ const server = http.createServer(async (req, res) => {
         type: 'mcp_request',
         request_id: requestId,
         session_epoch: epoch,
+        pair_id: capability.pair_id,
         headers: forwardedHeaders,
         body,
       }));
