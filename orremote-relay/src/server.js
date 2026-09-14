@@ -142,11 +142,21 @@ function oauthErrorResponse(res, error, status = 400) {
   json(res, status, { error: allowed.has(code) ? code : 'invalid_request' }, { pragma: 'no-cache' });
 }
 
-export function createRelayServer(config, deviceRelay) {
+export function createRelayServer(config, deviceRelay, commandBus = null) {
   const pairAttempts = new Map();
   const oauth = createOAuthService({ config, deviceRelay });
   const mcpPluginHandler = createMcpPluginHandler({ config, oauth, deviceRelay });
   const work = createWorkConsole({ config, deviceRelay });
+
+  async function registerPairWithBus(claim) {
+    if (!commandBus?.enabled) return true;
+    try {
+      return await commandBus.registerPair({ deviceId: claim.deviceId, pairId: claim.pairId });
+    } catch (error) {
+      console.error('Supabase pair registration failed', error?.message || error);
+      return false;
+    }
+  }
 
   function cleanupPairAttempts() {
     const now = Date.now();
@@ -184,6 +194,7 @@ export function createRelayServer(config, deviceRelay) {
           mcp_plugin: true,
           oauth_configured: Boolean(config.allowedClientId && config.allowedRedirectUris.length),
           work_console: true,
+          supabase_bus: Boolean(commandBus?.enabled),
         });
         return;
       }
@@ -214,6 +225,7 @@ export function createRelayServer(config, deviceRelay) {
           html(res, 400, work.renderPairing('Pairing code is invalid or expired.'));
           return;
         }
+        await registerPairWithBus(claim);
         const session = work.createSession(claim);
         seeOther(res, '/work', { 'set-cookie': work.sessionCookie(session.token) });
         return;
@@ -325,6 +337,7 @@ export function createRelayServer(config, deviceRelay) {
           json(res, 404, { error: 'PAIR_CODE_NOT_FOUND' });
           return;
         }
+        await registerPairWithBus(claim);
         json(res, 200, {
           paired: true,
           device_id: claim.deviceId,
@@ -340,12 +353,12 @@ export function createRelayServer(config, deviceRelay) {
       const exchangeMatch = url.pathname.match(/^\/token\/exchange\/([a-f0-9]{24})$/);
       if (req.method === 'POST' && exchangeMatch) {
         const deviceId = exchangeMatch[1];
-        let requestedScopes = ['presence', 'mcp'];
+        let requestedScopes = ['presence','mcp'];
         const rawBody = await readBody(req, config.maxBodyBytes);
         if (rawBody.trim()) {
           const body = JSON.parse(rawBody);
           if (Array.isArray(body.scopes)) {
-            const allowed = new Set(['presence', 'mcp']);
+            const allowed = new Set(['presence','mcp']);
             requestedScopes = body.scopes.map(String).filter((scope) => allowed.has(scope));
             if (!requestedScopes.length) {
               json(res, 400, { error: 'NO_ALLOWED_SCOPES' });
