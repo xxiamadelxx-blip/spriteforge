@@ -33,6 +33,7 @@ export function loadConfig(env = process.env) {
     oauthCodeTtlMs: positiveNumber(env.OAUTH_CODE_TTL_MS, 5 * 60 * 1000),
     oauthAccessTtlMs: positiveNumber(env.OAUTH_ACCESS_TTL_MS, 10 * 60 * 1000),
     oauthRefreshTtlMs: positiveNumber(env.OAUTH_REFRESH_TTL_MS, 30 * 24 * 60 * 60 * 1000),
+    workSessionTtlMs: positiveNumber(env.WORK_SESSION_TTL_MS, 60 * 60 * 1000),
     maxBodyBytes: positiveNumber(env.MAX_BODY_BYTES, 1024 * 1024),
     pairAttemptWindowMs: positiveNumber(env.PAIR_ATTEMPT_WINDOW_MS, 10 * 60 * 1000),
     maxPairAttemptsPerIp: positiveNumber(env.MAX_PAIR_ATTEMPTS_PER_IP, 8),
