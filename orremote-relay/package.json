@@ -6,9 +6,12 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check test/relay-smoke.test.js",
+    "check": "for f in src/*.js test/*.test.js; do node --check \"$f\" || exit 1; done",
     "test": "node --test test/*.test.js",
     "postinstall": "npm run check && npm test"
   },
-  "dependencies": { "ws": "^8.18.3" }
+  "dependencies": {
+    "ws": "^8.18.3",
+    "zod": "^4.0.0"
+  }
 }
