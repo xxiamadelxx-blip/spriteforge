@@ -39,5 +39,9 @@ export function loadConfig(env = process.env) {
     maxPairAttemptsPerIp: positiveNumber(env.MAX_PAIR_ATTEMPTS_PER_IP, 8),
     allowedClientId: String(env.OAUTH_ALLOWED_CLIENT_ID || ''),
     allowedRedirectUris,
+    supabaseUrl: stripTrailingSlash(env.SUPABASE_URL || ''),
+    supabasePublishableKey: String(env.SUPABASE_PUBLISHABLE_KEY || ''),
+    orremoteBusSecret: String(env.OREMOTE_BUS_SECRET || ''),
+    orremoteBusPollMs: positiveNumber(env.OREMOTE_BUS_POLL_MS, 1000),
   };
 }
