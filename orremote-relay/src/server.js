@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import http from 'node:http';
 import { createOAuthService } from './oauth.js';
 import { createMcpPluginHandler } from './mcp-plugin.js';
@@ -190,12 +191,46 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
           auth_mode: 'stateless-signed-credentials-v1',
           connected_devices: deviceRelay.connectedDeviceCount(),
           pending_pairs: deviceRelay.pendingPairCount(),
+          pending_artifacts: deviceRelay.pendingArtifactCount?.() ?? 0,
+          staged_artifacts: deviceRelay.stagedArtifactCount?.() ?? 0,
           capability_ttl_seconds: Math.floor(config.capabilityTtlMs / 1000),
+          artifact_download_ttl_seconds: Math.floor(config.artifactDownloadTtlMs / 1000),
           mcp_plugin: true,
           oauth_configured: Boolean(config.allowedClientId && config.allowedRedirectUris.length),
           work_console: true,
           supabase_bus: Boolean(commandBus?.enabled),
         });
+        return;
+      }
+
+      const downloadMatch = url.pathname.match(/^\/artifacts\/([^/]+)$/);
+      if (req.method === 'GET' && downloadMatch) {
+        const token = decodeURIComponent(downloadMatch[1]);
+        if (token.length > 4096) {
+          json(res, 401, { error: 'ARTIFACT_TOKEN_INVALID' });
+          return;
+        }
+        const stage = deviceRelay.openArtifactDownload(token);
+        res.writeHead(200, {
+          'content-type': stage.mimeType,
+          'content-length': stage.byteSize,
+          'cache-control': 'private, no-store',
+          pragma: 'no-cache',
+          'x-content-type-options': 'nosniff',
+          'content-disposition': stage.mimeType === 'image/png' ? 'inline' : `attachment; filename="${stage.artifactId}.json"`,
+        });
+        let consumed = false;
+        res.once('finish', () => {
+          if (consumed) return;
+          consumed = true;
+          deviceRelay.consumeArtifactStage(stage.stageId);
+        });
+        const stream = fs.createReadStream(stage.filePath);
+        stream.on('error', () => {
+          if (!res.headersSent) json(res, 404, { error: 'ARTIFACT_NOT_FOUND' });
+          else res.destroy();
+        });
+        stream.pipe(res);
         return;
       }
 
@@ -353,12 +388,12 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
       const exchangeMatch = url.pathname.match(/^\/token\/exchange\/([a-f0-9]{24})$/);
       if (req.method === 'POST' && exchangeMatch) {
         const deviceId = exchangeMatch[1];
-        let requestedScopes = ['presence','mcp'];
+        let requestedScopes = ['presence', 'mcp'];
         const rawBody = await readBody(req, config.maxBodyBytes);
         if (rawBody.trim()) {
           const body = JSON.parse(rawBody);
           if (Array.isArray(body.scopes)) {
-            const allowed = new Set(['presence','mcp']);
+            const allowed = new Set(['presence', 'mcp']);
             requestedScopes = body.scopes.map(String).filter((scope) => allowed.has(scope));
             if (!requestedScopes.length) {
               json(res, 400, { error: 'NO_ALLOWED_SCOPES' });
@@ -393,6 +428,36 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
           device_id: presence.deviceId,
           connected: presence.connected,
           session_epoch: presence.sessionEpoch,
+        });
+        return;
+      }
+
+      const artifactRequestMatch = url.pathname.match(/^\/artifact\/request\/([a-f0-9]{24})$/);
+      if (req.method === 'POST' && artifactRequestMatch) {
+        const deviceId = artifactRequestMatch[1];
+        const capability = deviceRelay.verifyCapability(bearerToken(req), deviceId, 'mcp');
+        if (!capability) {
+          unauthorized(res);
+          return;
+        }
+        const body = JSON.parse(await readBody(req, config.maxBodyBytes) || '{}');
+        const artifactId = String(body.artifact_id || '');
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(artifactId)) {
+          json(res, 400, { error: 'INVALID_ARTIFACT_ID' });
+          return;
+        }
+        const artifact = await deviceRelay.requestArtifact({
+          deviceId,
+          pairId: capability.pair_id,
+          artifactId,
+        });
+        json(res, 200, {
+          artifact_id: artifact.artifactId,
+          mime_type: artifact.mimeType,
+          byte_size: artifact.byteSize,
+          sha256: artifact.sha256,
+          expires_at: new Date(artifact.expiresAt).toISOString(),
+          download_url: `${config.publicOrigin}/artifacts/${encodeURIComponent(artifact.downloadToken)}`,
         });
         return;
       }
@@ -433,6 +498,10 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
       }
       if (error?.code === 'DEVICE_OFFLINE' || error?.code === 'DEVICE_DISCONNECTED' || error?.code === 'SESSION_SUPERSEDED') {
         json(res, 503, { error: error.code });
+        return;
+      }
+      if (String(error?.code || '').startsWith('ARTIFACT_')) {
+        json(res, Number(error.status || 400), { error: error.code });
         return;
       }
       console.error('request failed', error);
