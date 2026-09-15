@@ -43,5 +43,10 @@ export function loadConfig(env = process.env) {
     supabasePublishableKey: String(env.SUPABASE_PUBLISHABLE_KEY || ''),
     orremoteBusSecret: String(env.OREMOTE_BUS_SECRET || ''),
     orremoteBusPollMs: positiveNumber(env.OREMOTE_BUS_POLL_MS, 1000),
+    artifactTransferTimeoutMs: positiveNumber(env.ARTIFACT_TRANSFER_TIMEOUT_MS, 30_000),
+    artifactDownloadTtlMs: positiveNumber(env.ARTIFACT_DOWNLOAD_TTL_MS, 15 * 60 * 1000),
+    artifactMaxBytes: positiveNumber(env.ARTIFACT_MAX_BYTES, 32 * 1024 * 1024),
+    artifactMaxConcurrentPerDevice: positiveNumber(env.ARTIFACT_MAX_CONCURRENT_PER_DEVICE, 2),
+    artifactStagingDir: String(env.ARTIFACT_STAGING_DIR || ''),
   };
 }
