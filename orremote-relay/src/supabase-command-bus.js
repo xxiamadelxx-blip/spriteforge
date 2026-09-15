@@ -1,15 +1,30 @@
 const ALLOWED_TOOLS = new Set([
-  'screen.observe', 'ui.click', 'ui.set_text', 'touch.tap', 'touch.swipe',
-  'system.back', 'system.home', 'screen.screenshot', 'app.list', 'app.launch',
+  'screen.observe',
+  'ui.click',
+  'ui.set_text',
+  'touch.tap',
+  'touch.swipe',
+  'system.back',
+  'system.home',
+  'screen.screenshot',
+  'app.list',
+  'app.launch',
 ]);
 
 function asObject(text) {
-  try { return JSON.parse(String(text || '')); }
-  catch { return { raw_body: String(text || '') }; }
+  try {
+    return JSON.parse(String(text || ''));
+  } catch {
+    return { raw_body: String(text || '') };
+  }
 }
 
 export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetch }) {
-  const enabled = Boolean(config.supabaseUrl && config.supabasePublishableKey && config.orremoteBusSecret);
+  const enabled = Boolean(
+    config.supabaseUrl
+    && config.supabasePublishableKey
+    && config.orremoteBusSecret,
+  );
   let timer = null;
   let stopped = false;
   let running = false;
@@ -27,7 +42,9 @@ export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetc
     });
     const text = await response.text();
     let parsed = null;
-    if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+    if (text) {
+      try { parsed = JSON.parse(text); } catch { parsed = text; }
+    }
     if (!response.ok) {
       const error = new Error(`SUPABASE_RPC_${name.toUpperCase()}_${response.status}`);
       error.status = response.status;
@@ -39,11 +56,12 @@ export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetc
 
   async function registerPair({ deviceId, pairId }) {
     if (!enabled) return false;
-    return (await rpc('orremote_register_pair', {
+    const result = await rpc('orremote_register_pair', {
       p_bus_secret: config.orremoteBusSecret,
       p_device_id: deviceId,
       p_pair_id: pairId,
-    })) === true;
+    });
+    return result === true;
   }
 
   async function failCommand(commandId, error) {
@@ -57,37 +75,95 @@ export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetc
     });
   }
 
+  async function failArtifact(requestId, error) {
+    return rpc('orremote_fail_artifact', {
+      p_bus_secret: config.orremoteBusSecret,
+      p_request_id: requestId,
+      p_error: {
+        code: String(error?.code || 'ARTIFACT_FORWARD_FAILED'),
+        message: String(error?.message || error || 'ARTIFACT_FORWARD_FAILED'),
+      },
+    });
+  }
+
   async function processOnce() {
     if (!enabled) return 'disabled';
-    const rows = await rpc('orremote_claim_command', { p_bus_secret: config.orremoteBusSecret });
+    const rows = await rpc('orremote_claim_command', {
+      p_bus_secret: config.orremoteBusSecret,
+    });
     if (!Array.isArray(rows) || rows.length === 0) return 'idle';
     const command = rows[0];
     if (!ALLOWED_TOOLS.has(command.tool_name)) {
       await failCommand(command.command_id, { code: 'UNKNOWN_TOOL_CLAIM', message: 'UNKNOWN_TOOL_CLAIM' });
       return 'failed';
     }
+
     const requestBody = JSON.stringify({
-      jsonrpc: '2.0', id: `bus:${command.command_id}`, method: 'tools/call',
-      params: { name: command.tool_name, arguments: command.arguments || {} },
+      jsonrpc: '2.0',
+      id: `bus:${command.command_id}`,
+      method: 'tools/call',
+      params: {
+        name: command.tool_name,
+        arguments: command.arguments || {},
+      },
     });
+
     try {
       const forwarded = await deviceRelay.forwardMcp({
         deviceId: command.device_id,
         pairId: command.pair_id,
         headers: {
-          'mcp-protocol-version': '2026-07-28', 'mcp-method': 'tools/call',
-          'mcp-name': command.tool_name, 'content-type': 'application/json',
+          'mcp-protocol-version': '2026-07-28',
+          'mcp-method': 'tools/call',
+          'mcp-name': command.tool_name,
+          'content-type': 'application/json',
         },
         body: requestBody,
       });
       await rpc('orremote_complete_command', {
         p_bus_secret: config.orremoteBusSecret,
         p_command_id: command.command_id,
-        p_result: { http_status: Number(forwarded.status || 200), body: asObject(forwarded.body) },
+        p_result: {
+          http_status: Number(forwarded.status || 200),
+          body: asObject(forwarded.body),
+        },
       });
       return 'completed';
     } catch (error) {
       await failCommand(command.command_id, error);
+      return 'failed';
+    }
+  }
+
+  async function processArtifactOnce() {
+    if (!enabled) return 'disabled';
+    const rows = await rpc('orremote_claim_artifact', {
+      p_bus_secret: config.orremoteBusSecret,
+    });
+    if (!Array.isArray(rows) || rows.length === 0) return 'idle';
+    const request = rows[0];
+
+    try {
+      const artifact = await deviceRelay.requestArtifact({
+        deviceId: request.device_id,
+        pairId: request.pair_id,
+        artifactId: String(request.artifact_id || ''),
+      });
+      await rpc('orremote_complete_artifact', {
+        p_bus_secret: config.orremoteBusSecret,
+        p_request_id: request.request_id,
+        p_result: {
+          artifact_id: artifact.artifactId,
+          mime_type: artifact.mimeType,
+          byte_size: artifact.byteSize,
+          sha256: artifact.sha256,
+          expires_at: new Date(artifact.expiresAt).toISOString(),
+          download_url: `${config.publicOrigin}/artifacts/${encodeURIComponent(artifact.downloadToken)}`,
+        },
+      });
+      return 'completed';
+    } catch (error) {
+      await failArtifact(request.request_id, error);
       return 'failed';
     }
   }
@@ -97,17 +173,43 @@ export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetc
     timer = setTimeout(async () => {
       if (running || stopped) return schedule(config.orremoteBusPollMs || 1000);
       running = true;
-      let outcome = 'idle';
-      try { outcome = await processOnce(); }
-      catch (error) { console.error('Supabase command bus poll failed', error?.message || error); }
-      finally { running = false; }
-      schedule(outcome === 'idle' ? (config.orremoteBusPollMs || 1000) : 0);
+      let commandOutcome = 'idle';
+      let artifactOutcome = 'idle';
+      try {
+        commandOutcome = await processOnce();
+      } catch (error) {
+        console.error('Supabase command bus poll failed', error?.message || error);
+      }
+      try {
+        artifactOutcome = await processArtifactOnce();
+      } catch (error) {
+        console.error('Supabase artifact bus poll failed', error?.message || error);
+      } finally {
+        running = false;
+      }
+      const bothIdle = commandOutcome === 'idle' && artifactOutcome === 'idle';
+      schedule(bothIdle ? (config.orremoteBusPollMs || 1000) : 0);
     }, Math.max(0, delay));
     timer.unref?.();
   }
 
-  function start() { if (enabled && !timer && !stopped) schedule(0); }
-  function stop() { stopped = true; if (timer) clearTimeout(timer); timer = null; }
+  function start() {
+    if (!enabled || timer || stopped) return;
+    schedule(0);
+  }
 
-  return { enabled, processOnce, registerPair, start, stop };
+  function stop() {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+  }
+
+  return {
+    enabled,
+    processOnce,
+    processArtifactOnce,
+    registerPair,
+    start,
+    stop,
+  };
 }
