@@ -1,0 +1,13 @@
+{
+  "status":"OK",
+  "package":"ru.yandex.taximeter",
+  "revision":2,
+  "authorization_required":false,
+  "fingerprint":"fixture-money",
+  "nodes":[
+    {"handle":"money-heading","clickable":false,"enabled":true,"content_description":"Деньги\nПоддержка"},
+    {"handle":"money-date-15","clickable":true,"enabled":true,"content_description":"3 379\n15\nвт\nВкладка 7 из 7"},
+    {"handle":"money-today","clickable":true,"enabled":true,"content_description":"Сегодня\n3 379,29 ₽"},
+    {"handle":"money-report","clickable":true,"enabled":true,"content_description":"Отчёт за период"}
+  ]
+}

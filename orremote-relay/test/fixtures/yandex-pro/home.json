@@ -1,0 +1,13 @@
+{
+  "status": "OK",
+  "package": "ru.yandex.taximeter",
+  "revision": 1,
+  "authorization_required": false,
+  "fingerprint": "fixture-home",
+  "nodes": [
+    {"handle":"home-schedule","clickable":true,"enabled":true,"content_description":"Расписание"},
+    {"handle":"home-add-slot","clickable":true,"enabled":true,"content_description":"Добавить слот"},
+    {"handle":"home-money","clickable":true,"enabled":true,"content_description":"Деньги"},
+    {"handle":"home-tab","clickable":true,"enabled":true,"content_description":"Главная"}
+  ]
+}

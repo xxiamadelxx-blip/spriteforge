@@ -1,4 +1,6 @@
-const ALLOWED_TOOLS = new Set([
+import { getRelaySkillsRuntime } from './skills/index.js';
+
+const ANDROID_TOOLS = new Set([
   'screen.observe',
   'ui.click',
   'ui.set_text',
@@ -11,6 +13,8 @@ const ALLOWED_TOOLS = new Set([
   'app.launch',
 ]);
 
+const ALLOWED_TOOLS = new Set([...ANDROID_TOOLS, 'skill.run']);
+
 function asObject(text) {
   try {
     return JSON.parse(String(text || ''));
@@ -19,7 +23,31 @@ function asObject(text) {
   }
 }
 
-export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetch }) {
+function skillEnvelope(commandId, run) {
+  const failed = run?.status !== 'COMPLETED';
+  return {
+    jsonrpc: '2.0',
+    id: `bus:${commandId}`,
+    result: {
+      resultType: 'complete',
+      content: [{
+        type: 'text',
+        text: failed
+          ? `${run?.error_code || 'SKILL_EXECUTION_FAILED'}: ${run?.message || 'Skill stopped.'}`
+          : `Skill ${run?.skill_id || ''} completed.`,
+      }],
+      structuredContent: run,
+      isError: failed,
+    },
+  };
+}
+
+export function createSupabaseCommandBus({
+  config,
+  deviceRelay,
+  skillsRuntime = null,
+  fetchImpl = fetch,
+}) {
   const enabled = Boolean(
     config.supabaseUrl
     && config.supabasePublishableKey
@@ -28,6 +56,10 @@ export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetc
   let timer = null;
   let stopped = false;
   let running = false;
+
+  function resolveSkillsRuntime() {
+    return skillsRuntime || getRelaySkillsRuntime(deviceRelay);
+  }
 
   async function rpc(name, body) {
     if (!enabled) throw new Error('SUPABASE_BUS_DISABLED');
@@ -86,6 +118,62 @@ export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetc
     });
   }
 
+  async function completeCommand(commandId, httpStatus, body) {
+    return rpc('orremote_complete_command', {
+      p_bus_secret: config.orremoteBusSecret,
+      p_command_id: commandId,
+      p_result: {
+        http_status: Number(httpStatus || 200),
+        body,
+      },
+    });
+  }
+
+  async function processSkillCommand(command) {
+    const runtime = resolveSkillsRuntime();
+    if (!runtime || typeof runtime.run !== 'function') {
+      const error = new Error('SKILL_RUNTIME_UNAVAILABLE');
+      error.code = 'SKILL_RUNTIME_UNAVAILABLE';
+      throw error;
+    }
+    const args = command.arguments && typeof command.arguments === 'object' ? command.arguments : {};
+    const run = await runtime.run({
+      skillId: String(args.skill_id || ''),
+      inputs: args.inputs && typeof args.inputs === 'object' ? args.inputs : {},
+      deviceId: command.device_id,
+      pairId: command.pair_id,
+    });
+    await completeCommand(command.command_id, 200, skillEnvelope(command.command_id, run));
+  }
+
+  async function processAndroidCommand(command) {
+    const requestBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: `bus:${command.command_id}`,
+      method: 'tools/call',
+      params: {
+        name: command.tool_name,
+        arguments: command.arguments || {},
+      },
+    });
+    const forwarded = await deviceRelay.forwardMcp({
+      deviceId: command.device_id,
+      pairId: command.pair_id,
+      headers: {
+        'mcp-protocol-version': '2026-07-28',
+        'mcp-method': 'tools/call',
+        'mcp-name': command.tool_name,
+        'content-type': 'application/json',
+      },
+      body: requestBody,
+    });
+    await completeCommand(
+      command.command_id,
+      Number(forwarded.status || 200),
+      asObject(forwarded.body),
+    );
+  }
+
   async function processOnce() {
     if (!enabled) return 'disabled';
     const rows = await rpc('orremote_claim_command', {
@@ -98,36 +186,16 @@ export function createSupabaseCommandBus({ config, deviceRelay, fetchImpl = fetc
       return 'failed';
     }
 
-    const requestBody = JSON.stringify({
-      jsonrpc: '2.0',
-      id: `bus:${command.command_id}`,
-      method: 'tools/call',
-      params: {
-        name: command.tool_name,
-        arguments: command.arguments || {},
-      },
-    });
-
     try {
-      const forwarded = await deviceRelay.forwardMcp({
-        deviceId: command.device_id,
-        pairId: command.pair_id,
-        headers: {
-          'mcp-protocol-version': '2026-07-28',
-          'mcp-method': 'tools/call',
-          'mcp-name': command.tool_name,
-          'content-type': 'application/json',
-        },
-        body: requestBody,
-      });
-      await rpc('orremote_complete_command', {
-        p_bus_secret: config.orremoteBusSecret,
-        p_command_id: command.command_id,
-        p_result: {
-          http_status: Number(forwarded.status || 200),
-          body: asObject(forwarded.body),
-        },
-      });
+      if (command.tool_name === 'skill.run') {
+        await processSkillCommand(command);
+      } else if (ANDROID_TOOLS.has(command.tool_name)) {
+        await processAndroidCommand(command);
+      } else {
+        const error = new Error('UNKNOWN_TOOL_CLAIM');
+        error.code = 'UNKNOWN_TOOL_CLAIM';
+        throw error;
+      }
       return 'completed';
     } catch (error) {
       await failCommand(command.command_id, error);

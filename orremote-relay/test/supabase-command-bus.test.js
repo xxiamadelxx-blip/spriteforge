@@ -68,6 +68,54 @@ test('claimed command forwards exact MCP request and completes once', async () =
   assert.equal(calls.filter((c) => c.rpc === 'orremote_fail_command').length, 0);
 });
 
+test('skill.run executes in relay and completes through the same command result RPC', async () => {
+  const calls = [];
+  const skillRuns = [];
+  const fetchImpl = fakeFetch([
+    { rpc: 'orremote_claim_command', body: [{
+      command_id: '44444444-4444-4444-8444-444444444444',
+      device_id: 'e'.repeat(24),
+      pair_id: 'pair-generation-skill1234',
+      tool_name: 'skill.run',
+      arguments: {
+        skill_id: 'yandex_pro.planned_slot_orders.read',
+        inputs: { date: '2026-09-15' },
+      },
+    }] },
+    { rpc: 'orremote_complete_command', body: true },
+  ], calls);
+  const bus = createSupabaseCommandBus({
+    config: configured(),
+    fetchImpl,
+    deviceRelay: {
+      async forwardMcp() { throw new Error('skill.run must not be forwarded to Android'); },
+    },
+    skillsRuntime: {
+      async run(request) {
+        skillRuns.push(request);
+        return {
+          status: 'COMPLETED',
+          skill_id: request.skillId,
+          output: { orders: [] },
+          trace: [],
+        };
+      },
+    },
+  });
+
+  assert.equal(await bus.processOnce(), 'completed');
+  assert.deepEqual(skillRuns, [{
+    skillId: 'yandex_pro.planned_slot_orders.read',
+    inputs: { date: '2026-09-15' },
+    deviceId: 'e'.repeat(24),
+    pairId: 'pair-generation-skill1234',
+  }]);
+  const complete = calls.find((call) => call.rpc === 'orremote_complete_command');
+  assert.equal(complete.body.p_result.http_status, 200);
+  assert.equal(complete.body.p_result.body.result.structuredContent.status, 'COMPLETED');
+  assert.equal(complete.body.p_result.body.result.structuredContent.output.orders.length, 0);
+});
+
 test('transport failure is recorded once and never replayed by processOnce', async () => {
   const calls = [];
   let forwarded = 0;

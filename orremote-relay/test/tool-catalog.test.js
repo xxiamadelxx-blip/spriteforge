@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TOOLS, toolByName } from '../src/tool-catalog.js';
+import { ANDROID_TOOLS, TOOLS, toolByName } from '../src/tool-catalog.js';
 
-const EXPECTED_NAMES = [
+const ANDROID_NAMES = [
   'screen.observe',
   'ui.click',
   'ui.set_text',
@@ -15,9 +15,22 @@ const EXPECTED_NAMES = [
   'app.launch',
 ];
 
-test('public MCP catalog exposes exactly the ten verified M2 tools', () => {
-  assert.deepEqual(TOOLS.map((tool) => tool.name), EXPECTED_NAMES);
-  assert.equal(new Set(TOOLS.map((tool) => tool.name)).size, 10);
+test('Android primitive catalog remains exactly the ten accepted tools', () => {
+  assert.deepEqual(ANDROID_TOOLS.map((tool) => tool.name), ANDROID_NAMES);
+  assert.equal(new Set(ANDROID_TOOLS.map((tool) => tool.name)).size, 10);
+});
+
+test('public MCP catalog adds one relay-hosted skill.run capability', () => {
+  assert.deepEqual(TOOLS.map((tool) => tool.name), [...ANDROID_NAMES, 'skill.run']);
+  assert.equal(new Set(TOOLS.map((tool) => tool.name)).size, 11);
+  const skill = toolByName('skill.run');
+  assert.equal(skill.scope, 'android.control');
+  assert.equal(skill.annotations.readOnlyHint, false);
+  assert.equal(skill.inputSchema.safeParse({
+    skill_id: 'yandex_pro.planned_slot_orders.read',
+    inputs: { date: '2026-09-15' },
+  }).success, true);
+  assert.equal(skill.inputSchema.safeParse({ inputs: {} }).success, false);
 });
 
 test('observe tools are read-only and control tools require android.control', () => {
@@ -29,7 +42,7 @@ test('observe tools are read-only and control tools require android.control', ()
     assert.equal(tool.annotations.openWorldHint, false);
   }
 
-  for (const name of ['ui.click', 'ui.set_text', 'touch.tap', 'touch.swipe', 'system.back', 'system.home', 'app.launch']) {
+  for (const name of ['ui.click', 'ui.set_text', 'touch.tap', 'touch.swipe', 'system.back', 'system.home', 'app.launch', 'skill.run']) {
     const tool = toolByName(name);
     assert.equal(tool.scope, 'android.control');
     assert.equal(tool.annotations.readOnlyHint, false);
@@ -39,7 +52,7 @@ test('observe tools are read-only and control tools require android.control', ()
   }
 });
 
-test('ui.click schema preserves the M2 expected_revision and selector contract', () => {
+test('ui.click schema preserves expected_revision and accepts HANDLE selector', () => {
   const click = toolByName('ui.click');
   assert.equal(click.inputSchema.safeParse({
     expected_revision: 311,
@@ -47,13 +60,33 @@ test('ui.click schema preserves the M2 expected_revision and selector contract',
     selector_value: 'M3 REMOTE TEST TARGET',
   }).success, true);
   assert.equal(click.inputSchema.safeParse({
-    selector_kind: 'TEXT',
-    selector_value: 'M3 REMOTE TEST TARGET',
+    expected_revision: 311,
+    selector_kind: 'HANDLE',
+    selector_value: 'observed-node-handle',
+  }).success, true);
+  assert.equal(click.inputSchema.safeParse({
+    selector_kind: 'HANDLE',
+    selector_value: 'observed-node-handle',
   }).success, false);
   assert.equal(click.inputSchema.safeParse({
     expected_revision: 311,
     selector_kind: 'BOGUS',
     selector_value: 'target',
+  }).success, false);
+});
+
+test('ui.set_text schema accepts HANDLE but still requires expected_revision', () => {
+  const setText = toolByName('ui.set_text');
+  assert.equal(setText.inputSchema.safeParse({
+    expected_revision: 311,
+    selector_kind: 'HANDLE',
+    selector_value: 'observed-editable-handle',
+    value: 'replacement',
+  }).success, true);
+  assert.equal(setText.inputSchema.safeParse({
+    selector_kind: 'HANDLE',
+    selector_value: 'observed-editable-handle',
+    value: 'replacement',
   }).success, false);
 });
 

@@ -1,0 +1,17 @@
+{
+  "status":"OK",
+  "package":"ru.yandex.taximeter",
+  "revision":5,
+  "authorization_required":false,
+  "fingerprint":"fixture-slot-orders-a",
+  "nodes":[
+    {"handle":"slot-title","clickable":false,"enabled":true,"content_description":"Слот: 3750,00₽\nSLOT-TEST"},
+    {"handle":"slot-summary","clickable":false,"enabled":true,"content_description":"07:31 — 22:06\n3 заказа • 12,34 км"},
+    {"handle":"slot-total","clickable":false,"enabled":true,"content_description":"Итого\n3750,00 ₽"},
+    {"handle":"slot-tips","clickable":false,"enabled":true,"content_description":"Чаевые\n450,00 ₽"},
+    {"handle":"slot-orders","clickable":true,"enabled":true,"content_description":"Заказы"},
+    {"handle":"slot-details","clickable":false,"enabled":true,"content_description":"Детали\nСтатус\nЗавершён\nТип слота\nПлановый\nНачало\n2026.09.15 07:31\nЗавершение\n2026.09.15 22:06"},
+    {"handle":"order-row-a","clickable":true,"enabled":true,"content_description":"10:21\nМагазин A\n100,00 ₽\nкоэф 1.0"},
+    {"handle":"order-row-b","clickable":true,"enabled":true,"content_description":"10:57\nМагазин B\n120,50 ₽\nкоэф 1.2"}
+  ]
+}

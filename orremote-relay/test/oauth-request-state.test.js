@@ -2,8 +2,71 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createOAuthService } from '../src/oauth.js';
-const config={publicOrigin:'https://relay.test',oauthIssuer:'https://relay.test',mcpResource:'https://relay.test/mcp',relayTokenSecret:'s'.repeat(48),oauthCodeTtlMs:5*60*1000,oauthAccessTtlMs:10*60*1000,oauthRefreshTtlMs:30*24*60*60*1000,allowedClientId:'https://chatgpt.test/client-metadata.json',allowedRedirectUris:['https://chatgpt.test/oauth/callback']};
-function challenge(verifier){return crypto.createHash('sha256').update(verifier,'utf8').digest('base64url');}
-function service(){return createOAuthService({config,deviceRelay:{claimPairing(){return {deviceId:'a'.repeat(24),pairId:'pair_generation_1234567890'};}}});}
-test('authorize browser state is signed, expires and restores only validated fields',()=>{const oauth=service();const verifier='verifier-abcdefghijklmnopqrstuvwxyz-123456';const params=new URLSearchParams({response_type:'code',client_id:config.allowedClientId,redirect_uri:config.allowedRedirectUris[0],resource:config.mcpResource,scope:'android.observe android.control',state:'chatgpt-state',code_challenge:challenge(verifier),code_challenge_method:'S256'});const validated=oauth.validateAuthorizeRequest(new URL(`https://relay.test/oauth/authorize?${params}`));const sealed=oauth.sealAuthorizeRequest(validated);assert.ok(typeof sealed==='string'&&sealed.length>50);assert.deepEqual(oauth.openAuthorizeRequest(sealed),validated);const [body,signature]=sealed.split('.');const tamperedBody=Buffer.from(JSON.stringify({evil:true}),'utf8').toString('base64url');assert.throws(()=>oauth.openAuthorizeRequest(`${tamperedBody}.${signature}`),/invalid_request/i);assert.throws(()=>oauth.openAuthorizeRequest(`${body}.bogus`),/invalid_request/i);});
-test('completeAuthorization accepts sealed state and never trusts a replacement redirect URI',()=>{const oauth=service();const verifier='verifier-abcdefghijklmnopqrstuvwxyz-123456';const params=new URLSearchParams({response_type:'code',client_id:config.allowedClientId,redirect_uri:config.allowedRedirectUris[0],resource:config.mcpResource,scope:'android.observe android.control',state:'chatgpt-state',code_challenge:challenge(verifier),code_challenge_method:'S256'});const validated=oauth.validateAuthorizeRequest(new URL(`https://relay.test/oauth/authorize?${params}`));const sealed=oauth.sealAuthorizeRequest(validated);const redirect=new URL(oauth.completeAuthorization({requestToken:sealed,pairingCode:'12345678'}));assert.equal(`${redirect.origin}${redirect.pathname}`,config.allowedRedirectUris[0]);assert.equal(redirect.searchParams.get('state'),'chatgpt-state');assert.ok(redirect.searchParams.get('code'));});
+
+const config = {
+  publicOrigin: 'https://relay.test',
+  oauthIssuer: 'https://relay.test',
+  mcpResource: 'https://relay.test/mcp',
+  relayTokenSecret: 's'.repeat(48),
+  oauthCodeTtlMs: 5 * 60 * 1000,
+  oauthAccessTtlMs: 10 * 60 * 1000,
+  oauthRefreshTtlMs: 30 * 24 * 60 * 60 * 1000,
+  allowedClientId: 'https://chatgpt.test/client-metadata.json',
+  allowedRedirectUris: ['https://chatgpt.test/oauth/callback'],
+};
+
+function challenge(verifier) {
+  return crypto.createHash('sha256').update(verifier, 'utf8').digest('base64url');
+}
+
+function service() {
+  return createOAuthService({
+    config,
+    deviceRelay: { claimPairing() { return { deviceId: 'a'.repeat(24), pairId: 'pair_generation_1234567890' }; } },
+  });
+}
+
+test('authorize browser state is signed, expires and restores only validated fields', () => {
+  const oauth = service();
+  const verifier = 'verifier-abcdefghijklmnopqrstuvwxyz-123456';
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: config.allowedClientId,
+    redirect_uri: config.allowedRedirectUris[0],
+    resource: config.mcpResource,
+    scope: 'android.observe android.control',
+    state: 'chatgpt-state',
+    code_challenge: challenge(verifier),
+    code_challenge_method: 'S256',
+  });
+  const validated = oauth.validateAuthorizeRequest(new URL(`https://relay.test/oauth/authorize?${params}`));
+  const sealed = oauth.sealAuthorizeRequest(validated);
+  assert.ok(typeof sealed === 'string' && sealed.length > 50);
+  assert.deepEqual(oauth.openAuthorizeRequest(sealed), validated);
+
+  const [body, signature] = sealed.split('.');
+  const tamperedBody = Buffer.from(JSON.stringify({ evil: true }), 'utf8').toString('base64url');
+  assert.throws(() => oauth.openAuthorizeRequest(`${tamperedBody}.${signature}`), /invalid_request/i);
+  assert.throws(() => oauth.openAuthorizeRequest(`${body}.bogus`), /invalid_request/i);
+});
+
+test('completeAuthorization accepts sealed state and never trusts a replacement redirect URI', () => {
+  const oauth = service();
+  const verifier = 'verifier-abcdefghijklmnopqrstuvwxyz-123456';
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: config.allowedClientId,
+    redirect_uri: config.allowedRedirectUris[0],
+    resource: config.mcpResource,
+    scope: 'android.observe android.control',
+    state: 'chatgpt-state',
+    code_challenge: challenge(verifier),
+    code_challenge_method: 'S256',
+  });
+  const validated = oauth.validateAuthorizeRequest(new URL(`https://relay.test/oauth/authorize?${params}`));
+  const sealed = oauth.sealAuthorizeRequest(validated);
+  const redirect = new URL(oauth.completeAuthorization({ requestToken: sealed, pairingCode: '12345678' }));
+  assert.equal(`${redirect.origin}${redirect.pathname}`, config.allowedRedirectUris[0]);
+  assert.equal(redirect.searchParams.get('state'), 'chatgpt-state');
+  assert.ok(redirect.searchParams.get('code'));
+});

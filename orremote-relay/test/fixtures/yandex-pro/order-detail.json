@@ -1,0 +1,17 @@
+{
+  "status":"OK",
+  "package":"ru.yandex.taximeter",
+  "revision":6,
+  "authorization_required":false,
+  "fingerprint":"fixture-order-detail",
+  "nodes":[
+    {"handle":"order-title","clickable":false,"enabled":true,"content_description":"Заказ"},
+    {"handle":"order-origin","clickable":false,"enabled":true,"content_description":"Откуда\nТестовый адрес отправления"},
+    {"handle":"order-destination","clickable":false,"enabled":true,"content_description":"Куда\nТестовый адрес доставки"},
+    {"handle":"order-total","clickable":true,"enabled":true,"content_description":"Итого"},
+    {"handle":"order-total-value","clickable":false,"enabled":true,"content_description":"100,00 ₽"},
+    {"handle":"order-details","clickable":false,"enabled":true,"content_description":"Детали\nСтатус\nЗавершён\nКоэффициент спроса\n1.0\nНомер заказа\nTEST-ORDER-001\nНачало\n2026.09.15 10:05\nЗавершение\n2026.09.15 10:21"},
+    {"handle":"order-feedback","clickable":true,"enabled":true,"content_description":"Как прошёл заказ?"},
+    {"handle":"order-problem","clickable":true,"enabled":true,"content_description":"Сообщить о проблеме"}
+  ]
+}

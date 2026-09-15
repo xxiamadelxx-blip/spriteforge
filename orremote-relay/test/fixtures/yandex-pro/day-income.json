@@ -1,0 +1,15 @@
+{
+  "status":"OK",
+  "package":"ru.yandex.taximeter",
+  "revision":3,
+  "authorization_required":false,
+  "fingerprint":"fixture-day-income",
+  "nodes":[
+    {"handle":"period-day","clickable":true,"enabled":true,"content_description":"День"},
+    {"handle":"period-week","clickable":true,"enabled":true,"content_description":"Неделя"},
+    {"handle":"period-month","clickable":true,"enabled":true,"content_description":"Месяц"},
+    {"handle":"daily-total","clickable":false,"enabled":true,"content_description":"3 379,29 ₽"},
+    {"handle":"other-row","clickable":false,"enabled":true,"content_description":"10:57\nДругое\n-2,36 ₽"},
+    {"handle":"planned-slot-row","clickable":true,"enabled":true,"content_description":"08:00–22:00\nПлановый слот\n3 562,5 ₽"}
+  ]
+}

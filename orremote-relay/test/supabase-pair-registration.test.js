@@ -44,6 +44,9 @@ test('successful manual Work pairing registers only device and pair generation w
   });
   assert.equal(response.status, 303);
   assert.equal(env.registrations.length, 1);
-  assert.deepEqual(env.registrations[0], { deviceId: 'a'.repeat(24), pairId: 'pair-generation-1234567890' });
+  assert.deepEqual(env.registrations[0], {
+    deviceId: 'a'.repeat(24),
+    pairId: 'pair-generation-1234567890',
+  });
   assert.equal('pairingCode' in env.registrations[0], false);
 });
