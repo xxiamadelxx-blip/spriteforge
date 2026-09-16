@@ -2,7 +2,10 @@ import { createDevicePrimitiveInvoker } from './device-invoker.js';
 import { createSkillRegistry } from './registry.js';
 import { createSkillRuntime } from './runtime.js';
 import { createDefaultSkillSafetyPolicy } from './safety-policy.js';
+import { createBrowserAdminRunPlanSkill } from './browser/admin-run-plan.js';
+import { createDeliveryCartPlanSkill } from './delivery/cart-plan.js';
 import { createFilesDownloadsApksSkill } from './files/downloads-apks.js';
+import { createMediaDiscoveryPlanSkill } from './media/discovery-plan.js';
 import { createSettingsDeviceInfoSkill } from './settings/device-info.js';
 import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot-orders.js';
 
@@ -13,6 +16,9 @@ export function createDefaultSkillRegistry() {
     createYandexProPlannedSlotOrdersSkill(),
     createSettingsDeviceInfoSkill(),
     createFilesDownloadsApksSkill(),
+    createBrowserAdminRunPlanSkill(),
+    createMediaDiscoveryPlanSkill(),
+    createDeliveryCartPlanSkill(),
   ]);
 }
 
