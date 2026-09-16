@@ -8,6 +8,8 @@ const ALLOWED_STEP_TYPES = new Set([
   'SET_TEXT_EXACT_SELECTOR',
   'ASSERT_EXACT_TEXT',
   'SCROLL_DOWN',
+  'WAIT_FOR_EXACT_SELECTOR',
+  'CAPTURE_EXACT_SELECTOR_TEXT',
 ]);
 
 function stepLabel(step) {
@@ -59,9 +61,10 @@ export function authorizeAiAssistantSkill(skill, { inputs = {} } = {}) {
       return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'AI assistant plan contains an unsupported action type.' };
     }
     const label = stepLabel(step);
+    const touchesField = type.startsWith('SET_TEXT') || type.startsWith('CAPTURE') || type.startsWith('WAIT');
     if (
       step?.sensitive === true
-      || (type.startsWith('SET_TEXT') && AUTH_FIELD_PATTERN.test(label))
+      || (touchesField && AUTH_FIELD_PATTERN.test(label))
     ) {
       return { ok: false, code: 'USER_AUTH_REQUIRED', message: 'Passwords, OTPs, API tokens and authorization secrets are user-only.' };
     }
