@@ -2,6 +2,8 @@ import { createDevicePrimitiveInvoker } from './device-invoker.js';
 import { createSkillRegistry } from './registry.js';
 import { createSkillRuntime } from './runtime.js';
 import { createDefaultSkillSafetyPolicy } from './safety-policy.js';
+import { createAiAssistantPlanSkill } from './ai/assistant-plan.js';
+import { authorizeAiAssistantSkill } from './ai/safety.js';
 import { createBrowserAdminRunPlanSkill } from './browser/admin-run-plan.js';
 import { createDeliveryCartPlanSkill } from './delivery/cart-plan.js';
 import { createFilesDownloadsApksSkill } from './files/downloads-apks.js';
@@ -19,16 +21,22 @@ export function createDefaultSkillRegistry() {
     createBrowserAdminRunPlanSkill(),
     createMediaDiscoveryPlanSkill(),
     createDeliveryCartPlanSkill(),
+    createAiAssistantPlanSkill(),
   ]);
 }
 
 export function createRelaySkillsRuntime({ deviceRelay, now = () => Date.now() }) {
   const safety = createDefaultSkillSafetyPolicy();
+  const authorizeSkill = async (skill, context) => {
+    const aiAuthorization = authorizeAiAssistantSkill(skill, context);
+    if (aiAuthorization != null) return aiAuthorization;
+    return safety.authorizeSkill(skill, context);
+  };
   return createSkillRuntime({
     invokePrimitive: createDevicePrimitiveInvoker(deviceRelay),
     registry: createDefaultSkillRegistry(),
     now,
-    authorizeSkill: safety.authorizeSkill,
+    authorizeSkill,
     panicSwitch: safety.isPanicked,
   });
 }
