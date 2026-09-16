@@ -5,7 +5,8 @@ export const BrowserAdminState = Object.freeze({
   BROWSER: 'BROWSER',
 });
 
-const AUTH_PATTERN = /(?:password|passcode|pin|otp|2fa|verification code|security code|api[ _-]?token|access[ _-]?token|secret|private key|cvv|cvc|card number|парол|пин|код подтверж|однораз|токен|секрет)/iu;
+const AUTH_INPUT_PATTERN = /(?:password|passcode|pin|otp|2fa|verification code|security code|api[ _-]?token|access[ _-]?token|secret|private key|cvv|cvc|card number|парол|пин|код подтверж|однораз|токен|секрет)/iu;
+const AUTH_CONTROL_PATTERN = /(?:password|passcode|pin|otp|2fa|two[- ]?factor|verification code|security code|private key|cvv|cvc|card number|парол|пин|код подтверж|однораз|(?:reveal|show|copy|create|generate|regenerate|rotate)\s+(?:api[ _-]?|access[ _-]?)?(?:token|key|secret)|(?:показать|открыть|скопировать|создать|сгенерировать|перевыпустить|ротировать)\s+(?:api[- ]?)?(?:токен|ключ|секрет))/iu;
 const DANGEROUS_CLICK_PATTERN = /(?:delete|remove|revoke|rotate|billing|pay now|purchase|checkout|buy now|reset pairing|удал|отозв|ротац|оплат|купить|оформить заказ|сбросить pairing)/iu;
 const ADDRESS_HINT_PATTERN = /(?:url|address|search|omnibox|адрес|поиск)/iu;
 const GO_PATTERN = /^(?:go|open|enter|ok|перейти|открыть|ввод|ок)$/iu;
@@ -122,8 +123,12 @@ function stop(error_code, message) {
   return { type: 'STOP', error_code, message };
 }
 
-function targetIsSensitive(snapshot, node) {
-  return node?.sensitive === true || AUTH_PATTERN.test(semanticDescriptor(snapshot, node));
+function targetIsSensitiveInput(snapshot, node) {
+  return node?.sensitive === true || AUTH_INPUT_PATTERN.test(semanticDescriptor(snapshot, node));
+}
+
+function targetIsSensitiveControl(snapshot, node) {
+  return node?.sensitive === true || AUTH_CONTROL_PATTERN.test(semanticDescriptor(snapshot, node));
 }
 
 function targetIsDangerous(snapshot, node) {
@@ -203,6 +208,9 @@ export function createBrowserAdminRunPlanSkill() {
         if (!target) return stop('BROWSER_TARGET_NOT_FOUND', `Exact click text not found: ${String(step.text || '')}`);
         const clickable = findClickableForNode(snapshot, target);
         if (!clickable) return stop('BROWSER_TARGET_NOT_CLICKABLE', 'Matched browser target is not clickable.');
+        if (targetIsSensitiveControl(snapshot, target) || targetIsSensitiveControl(snapshot, clickable)) {
+          return stop('USER_AUTH_REQUIRED', 'Sensitive browser control is user-only.');
+        }
         if (targetIsDangerous(snapshot, target) || targetIsDangerous(snapshot, clickable)) {
           return stop('SKILL_ACTION_NOT_ALLOWED', 'Matched browser action is destructive, billing-related or payment-related.');
         }
@@ -214,6 +222,9 @@ export function createBrowserAdminRunPlanSkill() {
         if (!target) return stop('BROWSER_TARGET_NOT_FOUND', 'Exact click selector did not match the current screen.');
         const clickable = findClickableForNode(snapshot, target);
         if (!clickable) return stop('BROWSER_TARGET_NOT_CLICKABLE', 'Matched browser target is not clickable.');
+        if (targetIsSensitiveControl(snapshot, target) || targetIsSensitiveControl(snapshot, clickable)) {
+          return stop('USER_AUTH_REQUIRED', 'Sensitive browser control is user-only.');
+        }
         if (targetIsDangerous(snapshot, target) || targetIsDangerous(snapshot, clickable)) {
           return stop('SKILL_ACTION_NOT_ALLOWED', 'Matched browser action is destructive, billing-related or payment-related.');
         }
@@ -226,7 +237,7 @@ export function createBrowserAdminRunPlanSkill() {
         if (target.editable !== true || !enabled(target)) {
           return stop('BROWSER_TARGET_NOT_EDITABLE', 'Matched browser target is not editable.');
         }
-        if (step.sensitive === true || targetIsSensitive(snapshot, target)) {
+        if (step.sensitive === true || targetIsSensitiveInput(snapshot, target)) {
           return stop('USER_AUTH_REQUIRED', 'Sensitive browser text entry is user-only.');
         }
         return {
@@ -244,7 +255,7 @@ export function createBrowserAdminRunPlanSkill() {
         if (target.editable !== true || !enabled(target)) {
           return stop('BROWSER_TARGET_NOT_EDITABLE', 'Matched browser label is not itself an editable field.');
         }
-        if (step.sensitive === true || targetIsSensitive(snapshot, target)) {
+        if (step.sensitive === true || targetIsSensitiveInput(snapshot, target)) {
           return stop('USER_AUTH_REQUIRED', 'Sensitive browser text entry is user-only.');
         }
         return {
@@ -262,7 +273,7 @@ export function createBrowserAdminRunPlanSkill() {
           if (!go) {
             return stop('BROWSER_NAVIGATION_SUBMIT_NOT_FOUND', 'Browser navigation submit control was not semantically available.');
           }
-          if (targetIsSensitive(snapshot, go) || targetIsDangerous(snapshot, go)) {
+          if (targetIsSensitiveControl(snapshot, go) || targetIsDangerous(snapshot, go)) {
             return stop('SKILL_ACTION_NOT_ALLOWED', 'Browser navigation submit control failed safety validation.');
           }
           return { type: 'CLICK_HANDLE', handle: go.handle, step_index: stepIndex, navigation_submit: true };
@@ -271,7 +282,7 @@ export function createBrowserAdminRunPlanSkill() {
         if (!bar) {
           return stop('BROWSER_ADDRESS_BAR_NOT_FOUND', 'Opera address bar was not semantically available.');
         }
-        if (targetIsSensitive(snapshot, bar)) {
+        if (targetIsSensitiveInput(snapshot, bar)) {
           return stop('USER_AUTH_REQUIRED', 'Sensitive browser text entry is user-only.');
         }
         return {
@@ -301,7 +312,7 @@ export function createBrowserAdminRunPlanSkill() {
         if (!target || target.editable !== true || !enabled(target)) {
           return { ok: false, code: 'BROWSER_TARGET_NOT_EDITABLE', message: 'Text target changed or is not editable.' };
         }
-        if (targetIsSensitive(snapshot, target)) {
+        if (targetIsSensitiveInput(snapshot, target)) {
           return { ok: false, code: 'USER_AUTH_REQUIRED', message: 'Sensitive browser text entry is user-only.' };
         }
         return { ok: true };
@@ -311,7 +322,7 @@ export function createBrowserAdminRunPlanSkill() {
         if (!target || target.clickable !== true || !enabled(target)) {
           return { ok: false, code: 'BROWSER_TARGET_NOT_CLICKABLE', message: 'Click target changed or is not clickable.' };
         }
-        if (targetIsSensitive(snapshot, target)) {
+        if (targetIsSensitiveControl(snapshot, target)) {
           return { ok: false, code: 'USER_AUTH_REQUIRED', message: 'Sensitive browser control is user-only.' };
         }
         if (targetIsDangerous(snapshot, target)) {
