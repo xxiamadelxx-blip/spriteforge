@@ -3,25 +3,39 @@ import test from 'node:test';
 import { createDefaultSkillRegistry } from '../src/skills/index.js';
 import { normalizeBrowserAdminPolicyInputs } from '../src/skills/browser/policy-inputs.js';
 
-function browserSnapshot() {
+function browserSnapshot({ focused = false } = {}) {
+  const nodes = [
+    {
+      handle: 'address-handle',
+      resource_id: 'com.opera.browser:id/url_field',
+      content_description: 'Address',
+      editable: true,
+      clickable: true,
+      enabled: true,
+      bounds: { left: 0, top: 0, right: 600, bottom: 100 },
+      depth: 1,
+    },
+  ];
+  if (focused) {
+    nodes.push({
+      handle: 'editable-address-handle',
+      resource_id: 'com.opera.browser:id/editable_url_field',
+      content_description: 'Search or enter address',
+      editable: true,
+      clickable: true,
+      enabled: true,
+      bounds: { left: 0, top: 0, right: 600, bottom: 100 },
+      depth: 2,
+    });
+  }
   return {
     package: 'com.opera.browser',
-    revision: 7,
-    nodes: [
-      {
-        handle: 'address-handle',
-        resource_id: 'com.opera.browser:id/url_field',
-        content_description: 'Address',
-        editable: true,
-        enabled: true,
-        bounds: { left: 0, top: 0, right: 600, bottom: 100 },
-        depth: 1,
-      },
-    ],
+    revision: focused ? 8 : 7,
+    nodes,
   };
 }
 
-test('browser admin site-home step is normalized before policy and execution', async () => {
+test('browser admin site-home focuses Opera omnibox before URL entry', async () => {
   const normalized = normalizeBrowserAdminPolicyInputs({
     site: 'render',
     domain: 'render.com',
@@ -39,13 +53,27 @@ test('browser admin site-home step is normalized before policy and execution', a
       steps: [{ type: 'NAVIGATE_SITE_HOME' }],
     },
   });
-  const directive = await skill.next({
+
+  const initial = browserSnapshot();
+  const focusDirective = await skill.next({
     state: 'BROWSER',
-    snapshot: browserSnapshot(),
+    snapshot: initial,
     context,
   });
-  assert.equal(directive.type, 'SET_TEXT_HANDLE');
-  assert.equal(directive.handle, 'address-handle');
-  assert.equal(directive.value, 'https://dashboard.render.com/');
-  assert.equal(directive.navigation_enter, true);
+  assert.equal(focusDirective.type, 'CLICK_HANDLE');
+  assert.equal(focusDirective.handle, 'address-handle');
+  assert.equal(focusDirective.navigation_focus, true);
+  assert.equal((await skill.validateDirective({ snapshot: initial, directive: focusDirective, context })).ok, true);
+  await skill.acceptResult({ directive: focusDirective, context });
+
+  const focused = browserSnapshot({ focused: true });
+  const enterDirective = await skill.next({
+    state: 'BROWSER',
+    snapshot: focused,
+    context,
+  });
+  assert.equal(enterDirective.type, 'SET_TEXT_HANDLE');
+  assert.equal(enterDirective.handle, 'editable-address-handle');
+  assert.equal(enterDirective.value, 'https://dashboard.render.com/');
+  assert.equal(enterDirective.navigation_enter, true);
 });
