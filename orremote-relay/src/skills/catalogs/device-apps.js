@@ -4,7 +4,7 @@ export const ADMIN_BROWSER = Object.freeze({
 
 export const AI_ASSISTANT_APPS = Object.freeze({
   chatgpt: 'com.openai.chatgpt',
-  qwen: 'com.tongyi.intl',
+  qwen: 'ai.qwenlm.chat.android',
   deepseek: 'com.deepseek.chat',
   claude: 'com.anthropic.claude',
   gemini: 'com.google.android.apps.bard',
