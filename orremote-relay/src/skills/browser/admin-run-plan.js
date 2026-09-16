@@ -10,6 +10,8 @@ const AUTH_CONTROL_PATTERN = /(?:password|passcode|pin|otp|2fa|two[- ]?factor|ve
 const DANGEROUS_CLICK_PATTERN = /(?:delete|remove|revoke|rotate|billing|pay now|purchase|checkout|buy now|reset pairing|удал|отозв|ротац|оплат|купить|оформить заказ|сбросить pairing)/iu;
 const ADDRESS_HINT_PATTERN = /(?:url|address|search|omnibox|адрес|поиск)/iu;
 const GO_PATTERN = /^(?:go|open|enter|ok|перейти|открыть|ввод|ок)$/iu;
+const OPERA_URL_FIELD_ID = 'com.opera.browser:id/url_field';
+const OPERA_EDITABLE_URL_FIELD_ID = 'com.opera.browser:id/editable_url_field';
 const MAX_CAPTURE_CHARS = 20_000;
 
 function allNodes(snapshot) {
@@ -165,7 +167,9 @@ function boundedInteger(value, fallback, min, max) {
 
 function addressBar(snapshot) {
   const editable = allNodes(snapshot).filter((node) => node?.editable === true && enabled(node) && node?.sensitive !== true);
-  return editable.find((node) => ADDRESS_HINT_PATTERN.test(nodeDescriptor(node)))
+  return editable.find((node) => node?.resource_id === OPERA_EDITABLE_URL_FIELD_ID)
+    || editable.find((node) => node?.resource_id === OPERA_URL_FIELD_ID)
+    || editable.find((node) => ADDRESS_HINT_PATTERN.test(nodeDescriptor(node)))
     || (editable.length === 1 ? editable[0] : null);
 }
 
@@ -344,6 +348,7 @@ export function createBrowserAdminRunPlanSkill() {
           }
           return { type: 'CLICK_HANDLE', handle: go.handle, step_index: stepIndex, navigation_submit: true };
         }
+
         const bar = addressBar(snapshot);
         if (!bar) {
           return stop('BROWSER_ADDRESS_BAR_NOT_FOUND', 'Opera address bar was not semantically available.');
@@ -351,13 +356,26 @@ export function createBrowserAdminRunPlanSkill() {
         if (targetIsSensitiveInput(snapshot, bar)) {
           return stop('USER_AUTH_REQUIRED', 'Sensitive browser text entry is user-only.');
         }
+
+        if (context.navigation_phase === 'enter') {
+          return {
+            type: 'SET_TEXT_HANDLE',
+            handle: bar.handle,
+            value: String(step.url || ''),
+            sensitive: false,
+            step_index: stepIndex,
+            navigation_enter: true,
+          };
+        }
+
+        if (bar.clickable !== true) {
+          return stop('BROWSER_ADDRESS_BAR_NOT_CLICKABLE', 'Opera address bar must be focused before URL entry.');
+        }
         return {
-          type: 'SET_TEXT_HANDLE',
+          type: 'CLICK_HANDLE',
           handle: bar.handle,
-          value: String(step.url || ''),
-          sensitive: false,
           step_index: stepIndex,
-          navigation_enter: true,
+          navigation_focus: true,
         };
       }
 
@@ -402,6 +420,10 @@ export function createBrowserAdminRunPlanSkill() {
 
     async acceptResult({ directive, context }) {
       if (directive.type === 'LAUNCH') return true;
+      if (directive.navigation_focus === true) {
+        context.navigation_phase = 'enter';
+        return true;
+      }
       if (directive.navigation_enter === true) {
         context.navigation_phase = 'submit';
         return true;
