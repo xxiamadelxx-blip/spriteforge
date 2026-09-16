@@ -9,6 +9,7 @@ import { normalizeBrowserAdminPolicyInputs } from './browser/policy-inputs.js';
 import { createDeliveryCartPlanSkill } from './delivery/cart-plan.js';
 import { createFilesDownloadsApksSkill } from './files/downloads-apks.js';
 import { createMediaDiscoveryPlanSkill } from './media/discovery-plan.js';
+import { normalizeNativePolicyInputs } from './native/policy-inputs.js';
 import { createSettingsDeviceInfoSkill } from './settings/device-info.js';
 import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot-orders.js';
 
@@ -35,6 +36,12 @@ export function createRelaySkillsRuntime({ deviceRelay, now = () => Date.now() }
       return safety.authorizeSkill(skill, {
         ...context,
         inputs: normalizeBrowserAdminPolicyInputs(context?.inputs || {}),
+      });
+    }
+    if (skill?.id === 'media.discovery.run_plan' || skill?.id === 'delivery.consumer.build_cart') {
+      return safety.authorizeSkill(skill, {
+        ...context,
+        inputs: normalizeNativePolicyInputs(context?.inputs || {}),
       });
     }
     return safety.authorizeSkill(skill, context);

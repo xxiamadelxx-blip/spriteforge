@@ -1,25 +1,18 @@
 import { sanitizeVisibleUi } from '../visible-ui.js';
-import { createBrowserAdminRunPlanSkill } from './admin-run-plan.js';
-import { normalizeBrowserAdminExecutionInputs } from './policy-inputs.js';
+import { createNativeExactPlanSkill } from './exact-plan.js';
 
 function stop(error_code, message) {
   return { type: 'STOP', error_code, message };
 }
 
-export function createBrowserAdminSkill() {
-  const base = createBrowserAdminRunPlanSkill();
+export function createNativeDiscoverablePlanSkill(options) {
+  const base = createNativeExactPlanSkill(options);
   return Object.freeze({
     ...base,
-    createContext(args = {}) {
-      return base.createContext({
-        ...args,
-        inputs: normalizeBrowserAdminExecutionInputs(args.inputs || {}),
-      });
-    },
     async next(args) {
       const { state, snapshot, context } = args;
       const step = context?.steps?.[context?.index];
-      if (state === 'BROWSER' && step?.type === 'CAPTURE_VISIBLE_UI') {
+      if (state === 'TARGET_APP' && step?.type === 'CAPTURE_VISIBLE_UI') {
         const key = String(step.key || '').trim();
         if (!key || key.length > 80) {
           return stop('SKILL_ACTION_NOT_ALLOWED', 'Capture key must be a non-empty string up to 80 characters.');
