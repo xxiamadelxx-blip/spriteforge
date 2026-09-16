@@ -2,6 +2,10 @@ import {
   CONSUMER_DELIVERY_PACKAGES,
   MEDIA_DISCOVERY_PACKAGES,
 } from './catalogs/device-apps.js';
+import {
+  browserAdminProfileAllowsHost,
+  browserAdminProfileById,
+} from './browser/site-profiles.js';
 
 const DEFAULT_BROWSER_ADMIN_DOMAINS = Object.freeze([
   'codemagic.io',
@@ -132,8 +136,28 @@ function basicPlanValidation(steps, allowedTypes, forbiddenClickPattern) {
 }
 
 function browserPlanAuthorization(inputs, approved) {
+  const site = String(inputs?.site || '').trim().toLowerCase();
   const domain = normalizeDomain(inputs?.domain);
-  if (!domainAllowed(domain, approved.domains || [])) {
+  let allowedDomains = approved.domains || [];
+
+  if (site) {
+    const profile = browserAdminProfileById(site);
+    if (!profile) {
+      return {
+        ok: false,
+        code: 'SKILL_SITE_NOT_ALLOWED',
+        message: 'Unknown browser administration site profile.',
+      };
+    }
+    allowedDomains = profile.domains;
+    if (domain && !browserAdminProfileAllowsHost(site, domain)) {
+      return {
+        ok: false,
+        code: 'SKILL_DOMAIN_NOT_ALLOWED',
+        message: 'Declared browser domain does not belong to the selected site profile.',
+      };
+    }
+  } else if (!domainAllowed(domain, allowedDomains)) {
     return {
       ok: false,
       code: 'SKILL_DOMAIN_NOT_ALLOWED',
@@ -157,11 +181,14 @@ function browserPlanAuthorization(inputs, approved) {
         message: 'Browser navigation URL must be an absolute HTTPS URL on an approved domain.',
       };
     }
-    if (!String(step.url || '').startsWith('https://') || !domainAllowed(targetDomain, approved.domains || [])) {
+    const permitted = site
+      ? browserAdminProfileAllowsHost(site, targetDomain)
+      : domainAllowed(targetDomain, allowedDomains);
+    if (!String(step.url || '').startsWith('https://') || !permitted) {
       return {
         ok: false,
         code: 'SKILL_DOMAIN_NOT_ALLOWED',
-        message: 'Browser navigation cannot leave the approved infrastructure domain set.',
+        message: 'Browser navigation cannot leave the selected infrastructure service boundary.',
       };
     }
   }
