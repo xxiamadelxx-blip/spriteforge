@@ -6,6 +6,7 @@ import {
   browserAdminProfileAllowsHost,
   browserAdminProfileById,
 } from './browser/site-profiles.js';
+import { deliveryProfileById } from './delivery/app-profiles.js';
 
 const DEFAULT_BROWSER_ADMIN_DOMAINS = Object.freeze([
   'codemagic.io',
@@ -209,6 +210,42 @@ function nativePlanAuthorization(inputs, approved, forbiddenClickPattern) {
   return basicPlanValidation(steps, ALLOWED_NATIVE_STEP_TYPES, forbiddenClickPattern);
 }
 
+function deliveryPlanAuthorization(inputs, approved) {
+  const provider = String(inputs?.provider || '').trim().toLowerCase();
+  const declaredPackage = String(inputs?.package || '');
+  let targetPackage = declaredPackage;
+
+  if (provider) {
+    const profile = deliveryProfileById(provider);
+    if (!profile) {
+      return {
+        ok: false,
+        code: 'SKILL_PROVIDER_NOT_ALLOWED',
+        message: 'Unknown consumer delivery provider profile.',
+      };
+    }
+    if (declaredPackage && declaredPackage !== profile.package) {
+      return {
+        ok: false,
+        code: 'SKILL_PACKAGE_NOT_ALLOWED',
+        message: 'Declared package does not match the selected delivery provider.',
+      };
+    }
+    targetPackage = profile.package;
+  }
+
+  if (!approved.packages.includes(targetPackage)) {
+    return {
+      ok: false,
+      code: 'SKILL_PACKAGE_NOT_ALLOWED',
+      message: 'Requested delivery package is outside the consumer allowlist.',
+    };
+  }
+
+  const steps = Array.isArray(inputs?.steps) ? inputs.steps : [];
+  return basicPlanValidation(steps, ALLOWED_NATIVE_STEP_TYPES, FORBIDDEN_DELIVERY_CLICK_PATTERN);
+}
+
 export function createDefaultSkillSafetyPolicy({
   approvedSkills = DEFAULT_APPROVED_SKILLS,
   panicSwitch = () => process.env.ORREMOTE_SKILLS_PANIC === '1',
@@ -266,7 +303,7 @@ export function createDefaultSkillSafetyPolicy({
         return nativePlanAuthorization(inputs, approved, FORBIDDEN_MEDIA_CLICK_PATTERN);
       }
       if (id === 'delivery.consumer.build_cart') {
-        return nativePlanAuthorization(inputs, approved, FORBIDDEN_DELIVERY_CLICK_PATTERN);
+        return deliveryPlanAuthorization(inputs, approved);
       }
 
       if (declaredEffect !== 'read_only') {
