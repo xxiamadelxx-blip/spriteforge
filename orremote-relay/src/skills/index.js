@@ -2,6 +2,7 @@ import { createDevicePrimitiveInvoker } from './device-invoker.js';
 import { createSkillRegistry } from './registry.js';
 import { createSkillRuntime } from './runtime.js';
 import { createDefaultSkillSafetyPolicy } from './safety-policy.js';
+import { createFilesDownloadsApksSkill } from './files/downloads-apks.js';
 import { createSettingsDeviceInfoSkill } from './settings/device-info.js';
 import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot-orders.js';
 
@@ -11,6 +12,7 @@ export function createDefaultSkillRegistry() {
   return createSkillRegistry([
     createYandexProPlannedSlotOrdersSkill(),
     createSettingsDeviceInfoSkill(),
+    createFilesDownloadsApksSkill(),
   ]);
 }
 

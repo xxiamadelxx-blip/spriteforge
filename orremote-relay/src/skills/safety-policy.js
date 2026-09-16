@@ -7,6 +7,10 @@ const DEFAULT_APPROVED_SKILLS = Object.freeze({
     effect: 'read_only',
     packages: Object.freeze(['com.android.settings']),
   }),
+  'files.downloads.apks.read': Object.freeze({
+    effect: 'read_only',
+    packages: Object.freeze(['com.google.android.apps.nbu.files']),
+  }),
 });
 
 export function createDefaultSkillSafetyPolicy({

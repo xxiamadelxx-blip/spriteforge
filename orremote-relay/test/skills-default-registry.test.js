@@ -9,6 +9,7 @@ test('default registry exposes only explicitly approved M5 skills', () => {
     [
       'yandex_pro.planned_slot_orders.read',
       'settings.device_info.read',
+      'files.downloads.apks.read',
     ],
   );
 });
