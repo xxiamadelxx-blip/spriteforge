@@ -3,6 +3,7 @@ const DEFAULT_LIMITS = Object.freeze({
   maxStaleRecoveries: 6,
   deadlineMs: 120_000,
 });
+const MAX_WAIT_MS = 2_000;
 
 function structured(result) {
   if (!result || typeof result !== 'object') return {};
@@ -89,11 +90,13 @@ export function createSkillRuntime({
   invokePrimitive,
   registry,
   now = () => Date.now(),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   authorizeSkill = null,
   panicSwitch = () => false,
 }) {
   if (typeof invokePrimitive !== 'function') throw new Error('invokePrimitive is required');
   if (!registry || typeof registry.get !== 'function') throw new Error('registry is required');
+  if (typeof sleep !== 'function') throw new Error('sleep must be a function');
   if (authorizeSkill != null && typeof authorizeSkill !== 'function') throw new Error('authorizeSkill must be a function');
   if (typeof panicSwitch !== 'function') throw new Error('panicSwitch must be a function');
 
@@ -204,6 +207,27 @@ export function createSkillRuntime({
         if (directive.type === 'OBSERVE') {
           trace.push({ type: 'DIRECTIVE', state, directive: 'OBSERVE' });
           transitions += 1;
+          continue;
+        }
+        if (directive.type === 'WAIT') {
+          const durationMs = Number(directive.duration_ms);
+          if (!Number.isInteger(durationMs) || durationMs < 1 || durationMs > MAX_WAIT_MS) {
+            return stopped(
+              'SKILL_INVALID_WAIT',
+              `WAIT duration must be an integer between 1 and ${MAX_WAIT_MS} ms.`,
+              trace,
+              { state },
+            );
+          }
+          if (panicSwitch()) {
+            return stopped('PANIC_SWITCH_ACTIVE', 'Skills runtime panic switch is active.', trace, { state });
+          }
+          trace.push({ type: 'DIRECTIVE', state, directive: 'WAIT', duration_ms: durationMs });
+          transitions += 1;
+          await sleep(durationMs);
+          if (panicSwitch()) {
+            return stopped('PANIC_SWITCH_ACTIVE', 'Skills runtime panic switch is active.', trace, { state });
+          }
           continue;
         }
 
