@@ -1,6 +1,8 @@
 import { createDevicePrimitiveInvoker } from './device-invoker.js';
 import { createSkillRegistry } from './registry.js';
 import { createSkillRuntime } from './runtime.js';
+import { createDefaultSkillSafetyPolicy } from './safety-policy.js';
+import { createSettingsDeviceInfoSkill } from './settings/device-info.js';
 import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot-orders.js';
 
 const RUNTIMES = new WeakMap();
@@ -8,14 +10,18 @@ const RUNTIMES = new WeakMap();
 export function createDefaultSkillRegistry() {
   return createSkillRegistry([
     createYandexProPlannedSlotOrdersSkill(),
+    createSettingsDeviceInfoSkill(),
   ]);
 }
 
 export function createRelaySkillsRuntime({ deviceRelay, now = () => Date.now() }) {
+  const safety = createDefaultSkillSafetyPolicy();
   return createSkillRuntime({
     invokePrimitive: createDevicePrimitiveInvoker(deviceRelay),
     registry: createDefaultSkillRegistry(),
     now,
+    authorizeSkill: safety.authorizeSkill,
+    panicSwitch: safety.isPanicked,
   });
 }
 

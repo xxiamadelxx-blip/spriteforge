@@ -74,14 +74,37 @@ function primitiveForDirective(directive, snapshot) {
   }
 }
 
-export function createSkillRuntime({ invokePrimitive, registry, now = () => Date.now() }) {
+export function createSkillRuntime({
+  invokePrimitive,
+  registry,
+  now = () => Date.now(),
+  authorizeSkill = null,
+  panicSwitch = () => false,
+}) {
   if (typeof invokePrimitive !== 'function') throw new Error('invokePrimitive is required');
   if (!registry || typeof registry.get !== 'function') throw new Error('registry is required');
+  if (authorizeSkill != null && typeof authorizeSkill !== 'function') throw new Error('authorizeSkill must be a function');
+  if (typeof panicSwitch !== 'function') throw new Error('panicSwitch must be a function');
 
   return Object.freeze({
     async run({ skillId, inputs = {}, deviceId = null, pairId = null, limits = {} }) {
       const skill = registry.get(skillId);
       if (!skill) return stopped('SKILL_NOT_FOUND', `Unknown skill: ${skillId}`, []);
+
+      const trace = [];
+      if (panicSwitch()) {
+        return stopped('PANIC_SWITCH_ACTIVE', 'Skills runtime panic switch is active.', trace);
+      }
+      if (authorizeSkill) {
+        const authorization = validationResult(await authorizeSkill(skill, { inputs, deviceId, pairId }));
+        if (!authorization.ok) {
+          return stopped(
+            String(authorization.code || 'SKILL_POLICY_DENIED'),
+            String(authorization.message || 'Skill safety policy denied execution.'),
+            trace,
+          );
+        }
+      }
 
       const effective = {
         maxTransitions: Math.max(1, Number(limits.maxTransitions ?? DEFAULT_LIMITS.maxTransitions)),
@@ -91,12 +114,14 @@ export function createSkillRuntime({ invokePrimitive, registry, now = () => Date
       const context = typeof skill.createContext === 'function'
         ? skill.createContext({ inputs, deviceId, pairId })
         : { inputs };
-      const trace = [];
       const startedAt = now();
       let transitions = 0;
       let staleRecoveries = 0;
 
       while (true) {
+        if (panicSwitch()) {
+          return stopped('PANIC_SWITCH_ACTIVE', 'Skills runtime panic switch is active.', trace);
+        }
         if (transitions >= effective.maxTransitions) {
           return stopped(
             'SKILL_TRANSITION_LIMIT',
@@ -183,6 +208,9 @@ export function createSkillRuntime({ invokePrimitive, registry, now = () => Date
             trace,
             { state },
           );
+        }
+        if (panicSwitch()) {
+          return stopped('PANIC_SWITCH_ACTIVE', 'Skills runtime panic switch is active.', trace, { state });
         }
 
         const primitive = primitiveForDirective(directive, snapshot);
