@@ -12,6 +12,7 @@ test('default registry exposes only explicitly approved M5 skills', () => {
       'files.downloads.apks.read',
       'browser.admin.run_plan',
       'media.discovery.run_plan',
+      'media.playback.run_plan',
       'delivery.consumer.build_cart',
       'ai.assistant.run_plan',
     ],

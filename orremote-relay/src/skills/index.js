@@ -9,6 +9,8 @@ import { normalizeBrowserAdminPolicyInputs } from './browser/policy-inputs.js';
 import { createDeliveryCartPlanSkill } from './delivery/cart-plan.js';
 import { createFilesDownloadsApksSkill } from './files/downloads-apks.js';
 import { createMediaDiscoveryPlanSkill } from './media/discovery-plan.js';
+import { createMediaPlaybackPlanSkill } from './media/playback-plan.js';
+import { authorizeMediaPlaybackSkill } from './media/playback-safety.js';
 import { normalizeNativePolicyInputs } from './native/policy-inputs.js';
 import { createSettingsDeviceInfoSkill } from './settings/device-info.js';
 import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot-orders.js';
@@ -22,6 +24,7 @@ export function createDefaultSkillRegistry() {
     createFilesDownloadsApksSkill(),
     createBrowserAdminSkill(),
     createMediaDiscoveryPlanSkill(),
+    createMediaPlaybackPlanSkill(),
     createDeliveryCartPlanSkill(),
     createAiAssistantPlanSkill(),
   ]);
@@ -32,6 +35,8 @@ export function createRelaySkillsRuntime({ deviceRelay, now = () => Date.now() }
   const authorizeSkill = async (skill, context) => {
     const aiAuthorization = authorizeAiAssistantSkill(skill, context);
     if (aiAuthorization != null) return aiAuthorization;
+    const playbackAuthorization = authorizeMediaPlaybackSkill(skill, context);
+    if (playbackAuthorization != null) return playbackAuthorization;
     if (skill?.id === 'browser.admin.run_plan') {
       return safety.authorizeSkill(skill, {
         ...context,
