@@ -315,11 +315,13 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
         }
         const form = await readForm(req, config.maxBodyBytes);
         try {
-          const location = oauth.completeAuthorization({
+          const completed = oauth.completeAuthorizationResult({
             requestToken: String(form.get('request_token') || ''),
             pairingCode: String(form.get('pairing_code') || ''),
           });
-          redirect(res, location);
+          const registered = await registerPairWithBus(completed.pairing);
+          if (!registered) throw new Error('pair_registration_failed');
+          redirect(res, completed.location);
         } catch (error) {
           oauthErrorResponse(res, error);
         }
