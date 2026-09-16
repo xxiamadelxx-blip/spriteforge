@@ -2,6 +2,15 @@ export const ADMIN_BROWSER = Object.freeze({
   opera: 'com.opera.browser',
 });
 
+export const AI_ASSISTANT_APPS = Object.freeze({
+  chatgpt: 'com.openai.chatgpt',
+  qwen: 'com.tongyi.intl',
+  deepseek: 'com.deepseek.chat',
+  claude: 'com.anthropic.claude',
+  gemini: 'com.google.android.apps.bard',
+  suno: 'com.suno.android',
+});
+
 export const MEDIA_DISCOVERY_APPS = Object.freeze({
   yandexAfisha: 'ru.yandex.mobile.afisha',
   yandexMusic: 'ru.yandex.music',
@@ -23,5 +32,6 @@ export const CONSUMER_DELIVERY_APPS = Object.freeze({
   farsh: 'starter.farshburger.client',
 });
 
+export const AI_ASSISTANT_PACKAGES = Object.freeze(Object.values(AI_ASSISTANT_APPS));
 export const MEDIA_DISCOVERY_PACKAGES = Object.freeze(Object.values(MEDIA_DISCOVERY_APPS));
 export const CONSUMER_DELIVERY_PACKAGES = Object.freeze(Object.values(CONSUMER_DELIVERY_APPS));
