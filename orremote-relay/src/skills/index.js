@@ -4,7 +4,7 @@ import { createSkillRuntime } from './runtime.js';
 import { createDefaultSkillSafetyPolicy } from './safety-policy.js';
 import { createAiAssistantPlanSkill } from './ai/assistant-plan.js';
 import { authorizeAiAssistantSkill } from './ai/safety.js';
-import { createBrowserAdminRunPlanSkill } from './browser/admin-run-plan.js';
+import { createBrowserAdminSkill } from './browser/augmented-skill.js';
 import { normalizeBrowserAdminPolicyInputs } from './browser/policy-inputs.js';
 import { createDeliveryCartPlanSkill } from './delivery/cart-plan.js';
 import { createFilesDownloadsApksSkill } from './files/downloads-apks.js';
@@ -14,25 +14,12 @@ import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot
 
 const RUNTIMES = new WeakMap();
 
-function createNormalizedBrowserAdminSkill() {
-  const base = createBrowserAdminRunPlanSkill();
-  return Object.freeze({
-    ...base,
-    createContext(args = {}) {
-      return base.createContext({
-        ...args,
-        inputs: normalizeBrowserAdminPolicyInputs(args.inputs || {}),
-      });
-    },
-  });
-}
-
 export function createDefaultSkillRegistry() {
   return createSkillRegistry([
     createYandexProPlannedSlotOrdersSkill(),
     createSettingsDeviceInfoSkill(),
     createFilesDownloadsApksSkill(),
-    createNormalizedBrowserAdminSkill(),
+    createBrowserAdminSkill(),
     createMediaDiscoveryPlanSkill(),
     createDeliveryCartPlanSkill(),
     createAiAssistantPlanSkill(),
