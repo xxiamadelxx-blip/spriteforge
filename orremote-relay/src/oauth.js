@@ -145,7 +145,7 @@ export function createOAuthService({ config, deviceRelay }) {
     });
   }
 
-  function completeAuthorization({ request, requestToken, pairingCode }) {
+  function completeAuthorizationResult({ request, requestToken, pairingCode }) {
     const resolvedRequest = requestToken ? openAuthorizeRequest(requestToken) : validateRequestObject(config, request);
     const pairing = deviceRelay.claimPairing(String(pairingCode || ''));
     if (!pairing?.deviceId || !pairing?.pairId) throw oauthError('invalid_pairing_code');
@@ -167,7 +167,17 @@ export function createOAuthService({ config, deviceRelay }) {
     redirect.searchParams.set('code', code);
     if (resolvedRequest.state) redirect.searchParams.set('state', resolvedRequest.state);
     redirect.searchParams.set('iss', config.oauthIssuer);
-    return redirect.toString();
+    return {
+      location: redirect.toString(),
+      pairing: {
+        deviceId: pairing.deviceId,
+        pairId: pairing.pairId,
+      },
+    };
+  }
+
+  function completeAuthorization(args) {
+    return completeAuthorizationResult(args).location;
   }
 
   function issueTokenSet(record) {
@@ -250,6 +260,7 @@ export function createOAuthService({ config, deviceRelay }) {
     sealAuthorizeRequest,
     openAuthorizeRequest,
     completeAuthorization,
+    completeAuthorizationResult,
     exchangeAuthorizationCode,
     refresh,
     verifyAccessToken,
