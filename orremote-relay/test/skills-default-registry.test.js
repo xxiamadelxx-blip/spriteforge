@@ -10,12 +10,20 @@ test('default registry exposes only explicitly approved M5 skills', () => {
       'yandex_pro.planned_slot_orders.read',
       'settings.device_info.read',
       'files.downloads.apks.read',
+      'browser.admin.run_plan',
+      'media.discovery.run_plan',
+      'delivery.consumer.build_cart',
     ],
   );
 });
 
 test('MCP and Supabase can share one runtime instance for the same device relay', () => {
-  const deviceRelay = { async forwardMcp() { throw new Error('not called by construction'); } };
+  const deviceRelay = {
+    async forwardMcp() { throw new Error('not called by construction'); },
+  };
   assert.equal(getRelaySkillsRuntime(deviceRelay), getRelaySkillsRuntime(deviceRelay));
-  assert.notEqual(getRelaySkillsRuntime(deviceRelay), getRelaySkillsRuntime({ async forwardMcp() { throw new Error('other relay'); } }));
+  assert.notEqual(
+    getRelaySkillsRuntime(deviceRelay),
+    getRelaySkillsRuntime({ async forwardMcp() { throw new Error('other relay'); } }),
+  );
 });
