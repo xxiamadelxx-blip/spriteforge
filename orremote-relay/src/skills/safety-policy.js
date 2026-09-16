@@ -7,6 +7,7 @@ import {
   browserAdminProfileById,
 } from './browser/site-profiles.js';
 import { deliveryProfileById } from './delivery/app-profiles.js';
+import { mediaProfileById } from './media/app-profiles.js';
 
 const DEFAULT_BROWSER_ADMIN_DOMAINS = Object.freeze([
   'codemagic.io',
@@ -61,6 +62,8 @@ const ALLOWED_BROWSER_STEP_TYPES = new Set([
   'ASSERT_EXACT_TEXT',
   'SCROLL_DOWN',
   'NAVIGATE_URL',
+  'WAIT_FOR_EXACT_SELECTOR',
+  'CAPTURE_EXACT_SELECTOR_TEXT',
 ]);
 const ALLOWED_NATIVE_STEP_TYPES = new Set([
   'CLICK_EXACT_TEXT',
@@ -108,10 +111,11 @@ function basicPlanValidation(steps, allowedTypes, forbiddenClickPattern) {
       };
     }
 
+    const type = String(step.type || '');
     const label = planFieldLabel(step);
     if (
       step.sensitive === true
-      || ((String(step.type || '').startsWith('SET_TEXT')) && AUTH_FIELD_PATTERN.test(label))
+      || ((type.startsWith('SET_TEXT') || type === 'CAPTURE_EXACT_SELECTOR_TEXT') && AUTH_FIELD_PATTERN.test(label))
     ) {
       return {
         ok: false,
@@ -121,7 +125,7 @@ function basicPlanValidation(steps, allowedTypes, forbiddenClickPattern) {
     }
 
     if (
-      String(step.type || '').startsWith('CLICK')
+      type.startsWith('CLICK')
       && forbiddenClickPattern
       && forbiddenClickPattern.test(label)
     ) {
@@ -208,6 +212,42 @@ function nativePlanAuthorization(inputs, approved, forbiddenClickPattern) {
   }
   const steps = Array.isArray(inputs?.steps) ? inputs.steps : [];
   return basicPlanValidation(steps, ALLOWED_NATIVE_STEP_TYPES, forbiddenClickPattern);
+}
+
+function mediaPlanAuthorization(inputs, approved) {
+  const provider = String(inputs?.provider || '').trim().toLowerCase();
+  const declaredPackage = String(inputs?.package || '');
+  let targetPackage = declaredPackage;
+
+  if (provider) {
+    const profile = mediaProfileById(provider);
+    if (!profile) {
+      return {
+        ok: false,
+        code: 'SKILL_PROVIDER_NOT_ALLOWED',
+        message: 'Unknown media discovery provider profile.',
+      };
+    }
+    if (declaredPackage && declaredPackage !== profile.package) {
+      return {
+        ok: false,
+        code: 'SKILL_PACKAGE_NOT_ALLOWED',
+        message: 'Declared package does not match the selected media provider.',
+      };
+    }
+    targetPackage = profile.package;
+  }
+
+  if (!approved.packages.includes(targetPackage)) {
+    return {
+      ok: false,
+      code: 'SKILL_PACKAGE_NOT_ALLOWED',
+      message: 'Requested media package is outside the discovery allowlist.',
+    };
+  }
+
+  const steps = Array.isArray(inputs?.steps) ? inputs.steps : [];
+  return basicPlanValidation(steps, ALLOWED_NATIVE_STEP_TYPES, FORBIDDEN_MEDIA_CLICK_PATTERN);
 }
 
 function deliveryPlanAuthorization(inputs, approved) {
@@ -300,7 +340,7 @@ export function createDefaultSkillSafetyPolicy({
         return browserPlanAuthorization(inputs, approved);
       }
       if (id === 'media.discovery.run_plan') {
-        return nativePlanAuthorization(inputs, approved, FORBIDDEN_MEDIA_CLICK_PATTERN);
+        return mediaPlanAuthorization(inputs, approved);
       }
       if (id === 'delivery.consumer.build_cart') {
         return deliveryPlanAuthorization(inputs, approved);

@@ -10,6 +10,7 @@ const AUTH_CONTROL_PATTERN = /(?:password|passcode|pin|otp|2fa|two[- ]?factor|ve
 const DANGEROUS_CLICK_PATTERN = /(?:delete|remove|revoke|rotate|billing|pay now|purchase|checkout|buy now|reset pairing|удал|отозв|ротац|оплат|купить|оформить заказ|сбросить pairing)/iu;
 const ADDRESS_HINT_PATTERN = /(?:url|address|search|omnibox|адрес|поиск)/iu;
 const GO_PATTERN = /^(?:go|open|enter|ok|перейти|открыть|ввод|ок)$/iu;
+const MAX_CAPTURE_CHARS = 20_000;
 
 function allNodes(snapshot) {
   return Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
@@ -39,13 +40,18 @@ function containsBounds(parent, child) {
   return p.left <= c.left && p.top <= c.top && p.right >= c.right && p.bottom >= c.bottom;
 }
 
-function semanticDescriptor(snapshot, root) {
+function descendants(snapshot, root) {
   const rootDepth = Number(root?.depth ?? 0);
+  return allNodes(snapshot).filter((candidate) => (
+    candidate !== root
+    && Number(candidate?.depth ?? 0) > rootDepth
+    && containsBounds(root, candidate)
+  ));
+}
+
+function semanticDescriptor(snapshot, root) {
   const parts = [nodeDescriptor(root)];
-  for (const candidate of allNodes(snapshot)) {
-    if (candidate === root) continue;
-    if (Number(candidate?.depth ?? 0) <= rootDepth) continue;
-    if (!containsBounds(root, candidate)) continue;
+  for (const candidate of descendants(snapshot, root)) {
     parts.push(nodeDescriptor(candidate));
   }
   return parts.filter(Boolean).join(' ');
@@ -135,6 +141,28 @@ function targetIsDangerous(snapshot, node) {
   return DANGEROUS_CLICK_PATTERN.test(semanticDescriptor(snapshot, node));
 }
 
+function captureText(snapshot, root) {
+  const direct = [root?.text, root?.content_description]
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean);
+  if (direct.length > 0) return direct.join('\n').slice(0, MAX_CAPTURE_CHARS);
+
+  const parts = [];
+  for (const candidate of descendants(snapshot, root)) {
+    for (const value of [candidate?.text, candidate?.content_description]) {
+      const text = String(value ?? '').trim();
+      if (text && !parts.includes(text)) parts.push(text);
+    }
+  }
+  return parts.join('\n').slice(0, MAX_CAPTURE_CHARS);
+}
+
+function boundedInteger(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
 function addressBar(snapshot) {
   const editable = allNodes(snapshot).filter((node) => node?.editable === true && enabled(node) && node?.sensitive !== true);
   return editable.find((node) => ADDRESS_HINT_PATTERN.test(nodeDescriptor(node)))
@@ -164,6 +192,8 @@ export function createBrowserAdminRunPlanSkill() {
         steps: Array.isArray(inputs.steps) ? inputs.steps.map((step) => ({ ...step })) : [],
         index: 0,
         navigation_phase: null,
+        captures: {},
+        wait_attempts: {},
       };
     },
 
@@ -184,6 +214,7 @@ export function createBrowserAdminRunPlanSkill() {
           output: {
             domain: context.domain,
             completed_steps: context.index,
+            captures: { ...context.captures },
           },
         };
       }
@@ -201,6 +232,41 @@ export function createBrowserAdminRunPlanSkill() {
 
       if (step.type === 'SCROLL_DOWN') {
         return safeScrollDirective(snapshot, stepIndex);
+      }
+
+      if (step.type === 'WAIT_FOR_EXACT_SELECTOR') {
+        const target = findExactNode(snapshot, step.selector);
+        if (target) {
+          delete context.wait_attempts[stepIndex];
+          context.index += 1;
+          return { type: 'OBSERVE' };
+        }
+        const maxAttempts = boundedInteger(step.max_attempts, 20, 1, 40);
+        const attempts = Number(context.wait_attempts[stepIndex] || 0) + 1;
+        context.wait_attempts[stepIndex] = attempts;
+        if (attempts >= maxAttempts) {
+          return stop('BROWSER_WAIT_TIMEOUT', `Exact selector did not appear after ${maxAttempts} attempts.`);
+        }
+        return {
+          type: 'WAIT',
+          duration_ms: boundedInteger(step.poll_ms, 500, 50, 2_000),
+          step_index: stepIndex,
+        };
+      }
+
+      if (step.type === 'CAPTURE_EXACT_SELECTOR_TEXT') {
+        const target = findExactNode(snapshot, step.selector);
+        if (!target) return stop('BROWSER_TARGET_NOT_FOUND', 'Exact browser capture target was not found.');
+        if (targetIsSensitiveInput(snapshot, target) || targetIsSensitiveControl(snapshot, target)) {
+          return stop('USER_AUTH_REQUIRED', 'Sensitive browser content cannot be captured.');
+        }
+        const key = String(step.key || '').trim();
+        if (!key || key.length > 80) {
+          return stop('SKILL_ACTION_NOT_ALLOWED', 'Capture key must be a non-empty string up to 80 characters.');
+        }
+        context.captures[key] = captureText(snapshot, target);
+        context.index += 1;
+        return { type: 'OBSERVE' };
       }
 
       if (step.type === 'CLICK_EXACT_TEXT') {
