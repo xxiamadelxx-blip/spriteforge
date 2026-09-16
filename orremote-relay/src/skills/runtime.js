@@ -53,6 +53,17 @@ function primitiveForDirective(directive, snapshot) {
           exact: true,
         },
       };
+    case 'SET_TEXT_HANDLE':
+      return {
+        name: 'ui.set_text',
+        args: {
+          expected_revision: revision,
+          selector_kind: 'HANDLE',
+          selector_value: String(directive.handle || ''),
+          exact: true,
+          value: String(directive.value ?? ''),
+        },
+      };
     case 'SWIPE': {
       const args = {
         expected_revision: revision,
