@@ -5,6 +5,7 @@ import { createDefaultSkillSafetyPolicy } from './safety-policy.js';
 import { createAiAssistantPlanSkill } from './ai/assistant-plan.js';
 import { authorizeAiAssistantSkill } from './ai/safety.js';
 import { createBrowserAdminRunPlanSkill } from './browser/admin-run-plan.js';
+import { normalizeBrowserAdminPolicyInputs } from './browser/policy-inputs.js';
 import { createDeliveryCartPlanSkill } from './delivery/cart-plan.js';
 import { createFilesDownloadsApksSkill } from './files/downloads-apks.js';
 import { createMediaDiscoveryPlanSkill } from './media/discovery-plan.js';
@@ -13,12 +14,25 @@ import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot
 
 const RUNTIMES = new WeakMap();
 
+function createNormalizedBrowserAdminSkill() {
+  const base = createBrowserAdminRunPlanSkill();
+  return Object.freeze({
+    ...base,
+    createContext(args = {}) {
+      return base.createContext({
+        ...args,
+        inputs: normalizeBrowserAdminPolicyInputs(args.inputs || {}),
+      });
+    },
+  });
+}
+
 export function createDefaultSkillRegistry() {
   return createSkillRegistry([
     createYandexProPlannedSlotOrdersSkill(),
     createSettingsDeviceInfoSkill(),
     createFilesDownloadsApksSkill(),
-    createBrowserAdminRunPlanSkill(),
+    createNormalizedBrowserAdminSkill(),
     createMediaDiscoveryPlanSkill(),
     createDeliveryCartPlanSkill(),
     createAiAssistantPlanSkill(),
@@ -30,6 +44,12 @@ export function createRelaySkillsRuntime({ deviceRelay, now = () => Date.now() }
   const authorizeSkill = async (skill, context) => {
     const aiAuthorization = authorizeAiAssistantSkill(skill, context);
     if (aiAuthorization != null) return aiAuthorization;
+    if (skill?.id === 'browser.admin.run_plan') {
+      return safety.authorizeSkill(skill, {
+        ...context,
+        inputs: normalizeBrowserAdminPolicyInputs(context?.inputs || {}),
+      });
+    }
     return safety.authorizeSkill(skill, context);
   };
   return createSkillRuntime({

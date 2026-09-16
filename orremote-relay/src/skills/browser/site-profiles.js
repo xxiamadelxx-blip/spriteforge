@@ -1,12 +1,12 @@
 const PROFILES = Object.freeze([
-  Object.freeze({ id: 'codemagic', domains: Object.freeze(['codemagic.io']) }),
-  Object.freeze({ id: 'gitlab', domains: Object.freeze(['gitlab.com']) }),
-  Object.freeze({ id: 'github', domains: Object.freeze(['github.com']) }),
-  Object.freeze({ id: 'render', domains: Object.freeze(['render.com']) }),
-  Object.freeze({ id: 'supabase', domains: Object.freeze(['supabase.com']) }),
-  Object.freeze({ id: 'circleci', domains: Object.freeze(['circleci.com']) }),
-  Object.freeze({ id: 'railway', domains: Object.freeze(['railway.app']) }),
-  Object.freeze({ id: 'vercel', domains: Object.freeze(['vercel.com']) }),
+  Object.freeze({ id: 'codemagic', domains: Object.freeze(['codemagic.io']), start_url: 'https://codemagic.io/apps' }),
+  Object.freeze({ id: 'gitlab', domains: Object.freeze(['gitlab.com']), start_url: 'https://gitlab.com/dashboard/projects' }),
+  Object.freeze({ id: 'github', domains: Object.freeze(['github.com']), start_url: 'https://github.com/' }),
+  Object.freeze({ id: 'render', domains: Object.freeze(['render.com']), start_url: 'https://dashboard.render.com/' }),
+  Object.freeze({ id: 'supabase', domains: Object.freeze(['supabase.com']), start_url: 'https://supabase.com/dashboard/projects' }),
+  Object.freeze({ id: 'circleci', domains: Object.freeze(['circleci.com']), start_url: 'https://app.circleci.com/' }),
+  Object.freeze({ id: 'railway', domains: Object.freeze(['railway.app']), start_url: 'https://railway.app/dashboard' }),
+  Object.freeze({ id: 'vercel', domains: Object.freeze(['vercel.com']), start_url: 'https://vercel.com/dashboard' }),
 ]);
 
 const BY_ID = new Map(PROFILES.map((profile) => [profile.id, profile]));
@@ -26,7 +26,7 @@ function hostMatchesDomain(host, domain) {
 }
 
 function publicProfile(profile) {
-  return profile ? { id: profile.id, domains: [...profile.domains] } : null;
+  return profile ? { id: profile.id, domains: [...profile.domains], start_url: profile.start_url } : null;
 }
 
 export function browserAdminProfileById(id) {
