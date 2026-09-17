@@ -13,13 +13,13 @@ import { createMediaPlaybackPlanSkill } from './media/playback-plan.js';
 import { authorizeMediaPlaybackSkill } from './media/playback-safety.js';
 import { normalizeNativePolicyInputs } from './native/policy-inputs.js';
 import { createSettingsDeviceInfoSkill } from './settings/device-info.js';
-import { createYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot-orders.js';
+import { createCurrentYandexProPlannedSlotOrdersSkill } from './yandex-pro/planned-slot-orders-compat.js';
 
 const RUNTIMES = new WeakMap();
 
 export function createDefaultSkillRegistry() {
   return createSkillRegistry([
-    createYandexProPlannedSlotOrdersSkill(),
+    createCurrentYandexProPlannedSlotOrdersSkill(),
     createSettingsDeviceInfoSkill(),
     createFilesDownloadsApksSkill(),
     createBrowserAdminSkill(),
