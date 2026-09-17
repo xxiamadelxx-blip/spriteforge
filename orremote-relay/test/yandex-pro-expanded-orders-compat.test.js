@@ -46,3 +46,39 @@ test('current compatibility skill preserves the approved read-only identity', ()
   assert.deepEqual(skill.packages, ['ru.yandex.taximeter']);
   assert.equal(skill.version, 2);
 });
+
+test('fresh run inside expanded order list backs out once to restore completed-slot proof', async () => {
+  const skill = createCurrentYandexProPlannedSlotOrdersSkill();
+  const context = skill.createContext({ inputs: { date: 'today' } });
+  const snapshot = expandedOrders();
+
+  const first = await skill.next({
+    state: YandexProState.SLOT_ORDERS,
+    snapshot,
+    context,
+    inputs: { date: 'today' },
+  });
+  assert.deepEqual(first, {
+    type: 'BACK',
+    purpose: 'RESTORE_HISTORICAL_SLOT_PROOF',
+  });
+  assert.deepEqual(
+    await skill.validateDirective({
+      state: YandexProState.SLOT_ORDERS,
+      snapshot,
+      directive: first,
+      context,
+      inputs: { date: 'today' },
+    }),
+    { ok: true },
+  );
+
+  const second = await skill.next({
+    state: YandexProState.SLOT_ORDERS,
+    snapshot,
+    context,
+    inputs: { date: 'today' },
+  });
+  assert.equal(second.type, 'STOP');
+  assert.equal(second.error_code, 'HISTORICAL_SLOT_PROOF_RECOVERY_FAILED');
+});
