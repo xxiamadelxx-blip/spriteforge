@@ -299,6 +299,7 @@ export function createSkillRuntime({
           continue;
         }
 
+        let handledError = false;
         if (typeof skill.acceptResult === 'function') {
           const acceptance = await skill.acceptResult({
             state,
@@ -316,9 +317,10 @@ export function createSkillRuntime({
               { state },
             );
           }
+          handledError = acceptance?.handled_error === true;
         }
 
-        if (isError(primitiveResult)) {
+        if (isError(primitiveResult) && !handledError) {
           return stopped(
             String(primitiveBody.error_code || 'SKILL_PRIMITIVE_FAILED'),
             String(primitiveBody.message || `${primitive.name} failed`),
