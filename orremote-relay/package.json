@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/index.js",
     "check": "for f in src/*.js test/*.test.js; do node --check \"$f\" || exit 1; done",
-    "test": "RUN_LIVE_EXTERNAL_SMOKE=0 node --test test/*.test.js",
+    "test": "OREMOTE_TEST_ISOLATED=1 RUN_LIVE_EXTERNAL_SMOKE=0 node --import ./test/test-env.js --test test/*.test.js",
     "test:live": "RUN_LIVE_EXTERNAL_SMOKE=1 node --test test/live-external-smoke.test.js",
     "postinstall": "npm run check && npm test"
   },
