@@ -5,6 +5,7 @@ const FORBIDDEN_AI_CLICK_PATTERN = /(?:delete|remove|clear history|account|setti
 const ALLOWED_STEP_TYPES = new Set([
   'CLICK_EXACT_TEXT',
   'CLICK_EXACT_SELECTOR',
+  'TAP_EXACT_SELECTOR_CENTER',
   'SET_TEXT_EXACT_SELECTOR',
   'ASSERT_EXACT_TEXT',
   'SCROLL_DOWN',
@@ -68,7 +69,10 @@ export function authorizeAiAssistantSkill(skill, { inputs = {} } = {}) {
     ) {
       return { ok: false, code: 'USER_AUTH_REQUIRED', message: 'Passwords, OTPs, API tokens and authorization secrets are user-only.' };
     }
-    if (type.startsWith('CLICK') && FORBIDDEN_AI_CLICK_PATTERN.test(label)) {
+    if (
+      (type.startsWith('CLICK') || type === 'TAP_EXACT_SELECTOR_CENTER')
+      && FORBIDDEN_AI_CLICK_PATTERN.test(label)
+    ) {
       return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Account, settings, subscription, payment and destructive AI actions are blocked.' };
     }
   }
