@@ -3,9 +3,22 @@ import test from 'node:test';
 import { createDefaultSkillRegistry } from '../src/skills/index.js';
 import { normalizeBrowserAdminPolicyInputs } from '../src/skills/browser/policy-inputs.js';
 
-function browserSnapshot({ focused = false } = {}) {
-  const nodes = [
-    {
+function browserSnapshot({ focused = false, startPagePlaceholder = false } = {}) {
+  const nodes = [];
+  if (startPagePlaceholder && !focused) {
+    nodes.push({
+      handle: 'start-page-omnibar',
+      resource_id: 'com.opera.browser:id/top_omnibar_placeholder',
+      content_description: 'Искать или задать вопрос',
+      editable: false,
+      clickable: true,
+      enabled: true,
+      sensitive: false,
+      bounds: { left: 0, top: 275, right: 1080, bottom: 491 },
+      depth: 5,
+    });
+  } else {
+    nodes.push({
       handle: 'address-handle',
       resource_id: 'com.opera.browser:id/url_field',
       content_description: 'Address',
@@ -14,8 +27,8 @@ function browserSnapshot({ focused = false } = {}) {
       enabled: true,
       bounds: { left: 0, top: 0, right: 600, bottom: 100 },
       depth: 1,
-    },
-  ];
+    });
+  }
   if (focused) {
     nodes.push({
       handle: 'editable-address-handle',
@@ -35,7 +48,7 @@ function browserSnapshot({ focused = false } = {}) {
   };
 }
 
-test('browser admin site-home focuses Opera omnibox before URL entry', async () => {
+async function assertNavigationFocusAndEntry(initial) {
   const normalized = normalizeBrowserAdminPolicyInputs({
     site: 'render',
     domain: 'render.com',
@@ -54,14 +67,12 @@ test('browser admin site-home focuses Opera omnibox before URL entry', async () 
     },
   });
 
-  const initial = browserSnapshot();
   const focusDirective = await skill.next({
     state: 'BROWSER',
     snapshot: initial,
     context,
   });
   assert.equal(focusDirective.type, 'CLICK_HANDLE');
-  assert.equal(focusDirective.handle, 'address-handle');
   assert.equal(focusDirective.navigation_focus, true);
   assert.equal((await skill.validateDirective({ snapshot: initial, directive: focusDirective, context })).ok, true);
   await skill.acceptResult({ directive: focusDirective, context });
@@ -76,4 +87,15 @@ test('browser admin site-home focuses Opera omnibox before URL entry', async () 
   assert.equal(enterDirective.handle, 'editable-address-handle');
   assert.equal(enterDirective.value, 'https://dashboard.render.com/');
   assert.equal(enterDirective.navigation_enter, true);
+  return focusDirective;
+}
+
+test('browser admin site-home focuses Opera omnibox before URL entry', async () => {
+  const focusDirective = await assertNavigationFocusAndEntry(browserSnapshot());
+  assert.equal(focusDirective.handle, 'address-handle');
+});
+
+test('browser admin site-home accepts Opera start-page top omnibar placeholder', async () => {
+  const focusDirective = await assertNavigationFocusAndEntry(browserSnapshot({ startPagePlaceholder: true }));
+  assert.equal(focusDirective.handle, 'start-page-omnibar');
 });
