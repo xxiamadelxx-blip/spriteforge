@@ -47,8 +47,11 @@ function thrownErrorCode(error) {
   return '';
 }
 
-function isSessionSuperseded(error) {
-  return thrownErrorCode(error) === 'SESSION_SUPERSEDED';
+function readOnlyObserveRecoveryCode(error) {
+  const code = thrownErrorCode(error);
+  return code === 'SESSION_SUPERSEDED' || code === 'DEVICE_OFFLINE'
+    ? code
+    : null;
 }
 
 function primitiveForDirective(directive, snapshot) {
@@ -171,16 +174,17 @@ export function createSkillRuntime({
         try {
           observed = await invokePrimitive('screen.observe', {}, { deviceId, pairId, skillId });
         } catch (error) {
+          const recoveryCode = readOnlyObserveRecoveryCode(error);
           if (
             skill?.safety?.effect === 'read_only'
-            && isSessionSuperseded(error)
+            && recoveryCode != null
             && readOnlySessionRecoveries < effective.maxReadOnlySessionRecoveries
           ) {
             readOnlySessionRecoveries += 1;
             transitions += 1;
             trace.push({
               type: 'RECOVERY',
-              recovery: 'SESSION_SUPERSEDED',
+              recovery: recoveryCode,
               operation: 'screen.observe',
               attempt: readOnlySessionRecoveries,
             });
