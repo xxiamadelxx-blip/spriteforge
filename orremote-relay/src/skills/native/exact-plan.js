@@ -89,6 +89,21 @@ function findClickable(snapshot, target) {
   return index < 0 ? null : clickableAncestor(nodes, index);
 }
 
+function centerOfBounds(node) {
+  const bounds = node?.bounds;
+  if (!bounds) return null;
+  const left = Number(bounds.left);
+  const top = Number(bounds.top);
+  const right = Number(bounds.right);
+  const bottom = Number(bounds.bottom);
+  if (![left, top, right, bottom].every(Number.isFinite)) return null;
+  if (right <= left || bottom <= top) return null;
+  return {
+    x: Math.floor((left + right) / 2),
+    y: Math.floor((top + bottom) / 2),
+  };
+}
+
 function viewport(snapshot) {
   const bounds = allNodes(snapshot)
     .map((node) => node?.bounds)
@@ -247,7 +262,11 @@ export function createNativeExactPlanSkill({
 
       let target = null;
       if (step.type === 'CLICK_EXACT_TEXT') target = findExactText(snapshot, step.text);
-      if (step.type === 'CLICK_EXACT_SELECTOR' || step.type === 'SET_TEXT_EXACT_SELECTOR') {
+      if (
+        step.type === 'CLICK_EXACT_SELECTOR'
+        || step.type === 'SET_TEXT_EXACT_SELECTOR'
+        || step.type === 'TAP_EXACT_SELECTOR_CENTER'
+      ) {
         target = findExactNode(snapshot, step.selector);
       }
 
@@ -262,6 +281,25 @@ export function createNativeExactPlanSkill({
           return stop('SKILL_ACTION_NOT_ALLOWED', 'Matched native action is outside the skill safety boundary.');
         }
         return { type: 'CLICK_HANDLE', handle: clickable.handle, step_index: stepIndex };
+      }
+
+      if (step.type === 'TAP_EXACT_SELECTOR_CENTER') {
+        if (!target) return stop('NATIVE_TARGET_NOT_FOUND', 'Exact semantic tap target was not found.');
+        if (sensitive(snapshot, target)) {
+          return stop('USER_AUTH_REQUIRED', 'Sensitive native target is user-only.');
+        }
+        if (isDangerous(snapshot, target)) {
+          return stop('SKILL_ACTION_NOT_ALLOWED', 'Matched native tap target is outside the skill safety boundary.');
+        }
+        const center = centerOfBounds(target);
+        if (!center) return stop('NATIVE_TARGET_HAS_NO_BOUNDS', 'Semantic tap target has no usable bounds.');
+        return {
+          type: 'TAP_POINT',
+          x: center.x,
+          y: center.y,
+          selector: { ...step.selector },
+          step_index: stepIndex,
+        };
       }
 
       if (step.type === 'SET_TEXT_EXACT_SELECTOR') {
@@ -313,6 +351,23 @@ export function createNativeExactPlanSkill({
         }
         if (isDangerous(snapshot, target)) {
           return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Native action is outside the skill safety boundary.' };
+        }
+        return { ok: true };
+      }
+      if (directive.type === 'TAP_POINT') {
+        const target = findExactNode(snapshot, directive.selector);
+        if (!target) {
+          return { ok: false, code: 'NATIVE_TARGET_NOT_FOUND', message: 'Semantic tap target changed before execution.' };
+        }
+        if (sensitive(snapshot, target)) {
+          return { ok: false, code: 'USER_AUTH_REQUIRED', message: 'Sensitive native target is user-only.' };
+        }
+        if (isDangerous(snapshot, target)) {
+          return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Native tap target is outside the skill safety boundary.' };
+        }
+        const center = centerOfBounds(target);
+        if (!center || center.x !== Number(directive.x) || center.y !== Number(directive.y)) {
+          return { ok: false, code: 'NATIVE_TAP_TARGET_CHANGED', message: 'Semantic tap target moved before execution.' };
         }
         return { ok: true };
       }
