@@ -1,5 +1,5 @@
 const hook = 'https://api.codemagic.io/hooks/6aa6542caf15c45faf8dbe96';
-const targetSha = 'a443348a29a5623ad76a9bdfc5001a7de893c48a';
+const targetSha = 'bbec472425dc02ed3b7eb496926e2a15e69f62e2';
 
 const payload = {
   ref: 'refs/heads/ci/android-build',
@@ -15,11 +15,11 @@ const payload = {
   },
   head_commit: {
     id: targetSha,
-    message: 'ci: build final persistent relay candidate',
+    message: 'ci: build split-brain recovery candidate',
   },
   commits: [{
     id: targetSha,
-    message: 'ci: build final persistent relay candidate',
+    message: 'ci: build split-brain recovery candidate',
   }],
   pusher: { name: 'xxiamadelxx-blip' },
   sender: { login: 'xxiamadelxx-blip' },
