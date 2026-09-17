@@ -27,8 +27,20 @@ function text(node) {
   return String(node?.content_description ?? node?.text ?? '').trim();
 }
 
+function normalizedText(node) {
+  return text(node).replace(/\s+/g, ' ').trim();
+}
+
 function activeWorkDetected(snapshot) {
   return nodes(snapshot).some((node) => ACTIVE_WORK_PATTERNS.some((pattern) => pattern.test(text(node))));
+}
+
+function hasCompletedPlannedSlotProof(snapshot) {
+  return nodes(snapshot).some((node) => {
+    const value = normalizedText(node);
+    return /статус\s+завершён/i.test(value)
+      && /тип\s+слота\s+плановый/i.test(value);
+  });
 }
 
 function looksLikeExpandedHistoricalSlot(snapshot) {
@@ -39,8 +51,12 @@ function looksLikeExpandedHistoricalSlot(snapshot) {
   const hasSummary = list.some((node) => /\d+\s+заказ/i.test(text(node)) && /\d+(?:[.,]\d+)?\s*км/i.test(text(node)));
   const hasOrdersHeader = list.some((node) => node?.clickable === true && /^заказы$/i.test(text(node)));
   const parsedRows = list.filter((node) => node?.clickable === true && parseOrderRow(node) != null);
+  const topOfListProof = hasSummary && hasOrdersHeader;
+  const scrolledCompletedProof = hasCompletedPlannedSlotProof(snapshot);
 
-  return hasSlotHeader && hasSummary && hasOrdersHeader && parsedRows.length > 0;
+  return hasSlotHeader
+    && parsedRows.length > 0
+    && (topOfListProof || scrolledCompletedProof);
 }
 
 export function recognizeCurrentYandexProState(snapshot) {
