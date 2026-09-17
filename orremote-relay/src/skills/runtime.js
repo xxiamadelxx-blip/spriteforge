@@ -1,9 +1,11 @@
 const DEFAULT_LIMITS = Object.freeze({
   maxTransitions: 80,
   maxStaleRecoveries: 6,
+  maxReadOnlySessionRecoveries: 2,
   deadlineMs: 120_000,
 });
 const MAX_WAIT_MS = 2_000;
+const SESSION_RECOVERY_DELAY_MS = 100;
 
 function structured(result) {
   if (!result || typeof result !== 'object') return {};
@@ -34,6 +36,19 @@ function validationResult(value) {
   if (value === false) return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED' };
   if (typeof value === 'object') return value;
   return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED' };
+}
+
+function thrownErrorCode(error) {
+  const candidates = [error?.error_code, error?.code, error?.message, error];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function isSessionSuperseded(error) {
+  return thrownErrorCode(error) === 'SESSION_SUPERSEDED';
 }
 
 function primitiveForDirective(directive, snapshot) {
@@ -123,6 +138,10 @@ export function createSkillRuntime({
       const effective = {
         maxTransitions: Math.max(1, Number(limits.maxTransitions ?? DEFAULT_LIMITS.maxTransitions)),
         maxStaleRecoveries: Math.max(0, Number(limits.maxStaleRecoveries ?? DEFAULT_LIMITS.maxStaleRecoveries)),
+        maxReadOnlySessionRecoveries: Math.max(
+          0,
+          Number(limits.maxReadOnlySessionRecoveries ?? DEFAULT_LIMITS.maxReadOnlySessionRecoveries),
+        ),
         deadlineMs: Math.max(1, Number(limits.deadlineMs ?? DEFAULT_LIMITS.deadlineMs)),
       };
       const context = typeof skill.createContext === 'function'
@@ -131,6 +150,7 @@ export function createSkillRuntime({
       const startedAt = now();
       let transitions = 0;
       let staleRecoveries = 0;
+      let readOnlySessionRecoveries = 0;
 
       while (true) {
         if (panicSwitch()) {
@@ -151,6 +171,22 @@ export function createSkillRuntime({
         try {
           observed = await invokePrimitive('screen.observe', {}, { deviceId, pairId, skillId });
         } catch (error) {
+          if (
+            skill?.safety?.effect === 'read_only'
+            && isSessionSuperseded(error)
+            && readOnlySessionRecoveries < effective.maxReadOnlySessionRecoveries
+          ) {
+            readOnlySessionRecoveries += 1;
+            transitions += 1;
+            trace.push({
+              type: 'RECOVERY',
+              recovery: 'SESSION_SUPERSEDED',
+              operation: 'screen.observe',
+              attempt: readOnlySessionRecoveries,
+            });
+            await sleep(SESSION_RECOVERY_DELAY_MS);
+            continue;
+          }
           return stopped(
             'SKILL_OBSERVE_FAILED',
             String(error?.message || error || 'screen.observe failed'),
