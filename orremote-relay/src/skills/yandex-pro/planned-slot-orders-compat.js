@@ -55,6 +55,17 @@ function hasCompletedPlannedSlotProof(snapshot) {
   });
 }
 
+function hasPersistedCompletedPlannedProof(context) {
+  return context?.slot?.status === 'completed'
+    && context?.slot?.type === 'planned'
+    && Number.isInteger(context?.expectedOrderCount)
+    && context.expectedOrderCount >= 0;
+}
+
+function parsedOrderRows(snapshot) {
+  return nodes(snapshot).filter((node) => node?.clickable === true && parseOrderRow(node) != null);
+}
+
 function looksLikeExpandedHistoricalSlot(snapshot) {
   if (snapshot?.package !== YANDEX_PRO_PACKAGE || activeWorkDetected(snapshot)) return false;
 
@@ -62,7 +73,7 @@ function looksLikeExpandedHistoricalSlot(snapshot) {
   const hasSlotHeader = list.some((node) => /^слот:\s*[^\n]+(?:\n|$)/i.test(text(node)));
   const hasSummary = list.some((node) => /\d+\s+заказ/i.test(text(node)) && /\d+(?:[.,]\d+)?\s*км/i.test(text(node)));
   const hasOrdersHeader = list.some((node) => node?.clickable === true && /^заказы$/i.test(text(node)));
-  const parsedRows = list.filter((node) => node?.clickable === true && parseOrderRow(node) != null);
+  const parsedRows = parsedOrderRows(snapshot);
   const topOfListProof = hasSummary && hasOrdersHeader;
   const scrolledCompletedProof = hasCompletedPlannedSlotProof(snapshot);
 
@@ -71,10 +82,17 @@ function looksLikeExpandedHistoricalSlot(snapshot) {
     && (topOfListProof || scrolledCompletedProof);
 }
 
-export function recognizeCurrentYandexProState(snapshot) {
+function looksLikePersistedHistoricalViewport(snapshot, context) {
+  if (snapshot?.package !== YANDEX_PRO_PACKAGE || activeWorkDetected(snapshot)) return false;
+  if (!hasPersistedCompletedPlannedProof(context)) return false;
+  return parsedOrderRows(snapshot).length > 0;
+}
+
+export function recognizeCurrentYandexProState(snapshot, context = null) {
   const base = recognizeYandexProState(snapshot);
   if (base !== YandexProState.UNKNOWN) return base;
-  return looksLikeExpandedHistoricalSlot(snapshot)
+  if (looksLikeExpandedHistoricalSlot(snapshot)) return YandexProState.SLOT_ORDERS;
+  return looksLikePersistedHistoricalViewport(snapshot, context)
     ? YandexProState.SLOT_ORDERS
     : YandexProState.UNKNOWN;
 }
@@ -84,8 +102,8 @@ export function createCurrentYandexProPlannedSlotOrdersSkill(options) {
   return Object.freeze({
     ...base,
     version: 2,
-    recognize(snapshot) {
-      return recognizeCurrentYandexProState(snapshot);
+    recognize(snapshot, context) {
+      return recognizeCurrentYandexProState(snapshot, context);
     },
     async next(args) {
       const { state, context } = args;
