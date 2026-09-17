@@ -1,5 +1,5 @@
 const hook = 'https://api.codemagic.io/hooks/6aa6542caf15c45faf8dbe96';
-const targetSha = '74ba99ced2bec291ceb81c5314462fe495ae383a';
+const targetSha = '3173dbf9b081d937c4b0e943f25e71130b605f2e';
 
 const payload = {
   ref: 'refs/heads/ci/android-build',
@@ -15,11 +15,11 @@ const payload = {
   },
   head_commit: {
     id: targetSha,
-    message: 'ci: build relay lifecycle recovery candidate',
+    message: 'ci: build stable-session candidate',
   },
   commits: [{
     id: targetSha,
-    message: 'ci: build relay lifecycle recovery candidate',
+    message: 'ci: build stable-session candidate',
   }],
   pusher: { name: 'xxiamadelxx-blip' },
   sender: { login: 'xxiamadelxx-blip' },
