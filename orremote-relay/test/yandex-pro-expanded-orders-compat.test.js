@@ -23,6 +23,21 @@ function expandedOrders(extraNodes = []) {
   };
 }
 
+function scrolledCompletedOrders(details = 'Детали\nСтатус\nЗавершён\nТип слота\nПлановый\nНачало\n2026.09.17 10:00\nЗавершение\n2026.09.17 15:10', extraNodes = []) {
+  return {
+    package: 'ru.yandex.taximeter',
+    revision: 75,
+    nodes: [
+      { handle: 'slot-title', enabled: true, clickable: false, content_description: 'Слот: 1500,00₽\n325977209' },
+      { handle: 'row-a', enabled: true, clickable: true, content_description: '12:58\nТеремок\n100,00 ₽\nкоэф 1.0' },
+      { handle: 'row-b', enabled: true, clickable: true, content_description: '15:10\nBurger King\n100,00 ₽\nкоэф 1.0' },
+      { handle: 'details', enabled: true, clickable: false, content_description: details },
+      { handle: 'report-problem', enabled: true, clickable: true, content_description: 'Сообщить о проблеме' },
+      ...extraNodes,
+    ],
+  };
+}
+
 test('recognizes current expanded historical order list without legacy status/type block', () => {
   assert.equal(
     recognizeCurrentYandexProState(expandedOrders()),
@@ -30,10 +45,38 @@ test('recognizes current expanded historical order list without legacy status/ty
   );
 });
 
+test('recognizes scrolled historical order list only when completed planned-slot proof is visible', () => {
+  assert.equal(
+    recognizeCurrentYandexProState(scrolledCompletedOrders()),
+    YandexProState.SLOT_ORDERS,
+  );
+});
+
+test('scrolled compatibility stays unknown when completed planned-slot proof is missing or mismatched', () => {
+  assert.equal(
+    recognizeCurrentYandexProState(scrolledCompletedOrders(
+      'Детали\nСтатус\nАктивен\nТип слота\nПлановый',
+    )),
+    YandexProState.UNKNOWN,
+  );
+  assert.equal(
+    recognizeCurrentYandexProState(scrolledCompletedOrders(
+      'Детали\nСтатус\nЗавершён\nТип слота\nСвободный',
+    )),
+    YandexProState.UNKNOWN,
+  );
+});
+
 test('current expanded-list compatibility remains fail-closed when active work controls appear', () => {
   assert.equal(
     recognizeCurrentYandexProState(expandedOrders([
       { handle: 'active-order', enabled: true, clickable: true, content_description: 'Завершить заказ' },
+    ])),
+    YandexProState.ACTIVE_OR_UNSAFE,
+  );
+  assert.equal(
+    recognizeCurrentYandexProState(scrolledCompletedOrders(undefined, [
+      { handle: 'active-order', enabled: true, clickable: true, content_description: 'Принять заказ' },
     ])),
     YandexProState.ACTIVE_OR_UNSAFE,
   );
