@@ -23,6 +23,22 @@ function expandedOrders(extraNodes = []) {
   };
 }
 
+function profileRoot(extraNodes = []) {
+  return {
+    package: 'ru.yandex.taximeter',
+    revision: 159,
+    nodes: [
+      { handle: 'courier', enabled: true, clickable: false, content_description: 'Курьер Еды' },
+      { handle: 'income-format', enabled: true, clickable: true, content_description: 'Формат дохода\nСтабильный' },
+      { handle: 'home', enabled: true, clickable: true, content_description: 'Главная' },
+      { handle: 'orders', enabled: true, clickable: true, content_description: 'Заказы' },
+      { handle: 'messages', enabled: true, clickable: true, content_description: 'Сообщения' },
+      { handle: 'profile', enabled: true, clickable: true, content_description: 'Профиль' },
+      ...extraNodes,
+    ],
+  };
+}
+
 function scrolledCompletedOrders(details = 'Детали\nСтатус\nЗавершён\nТип слота\nПлановый\nНачало\n2026.09.17 10:00\nЗавершение\n2026.09.17 15:10', extraNodes = []) {
   return {
     package: 'ru.yandex.taximeter',
@@ -55,6 +71,44 @@ const persistedProof = {
   slot: { status: 'completed', type: 'planned' },
   expectedOrderCount: 15,
 };
+
+test('recognizes current Yandex Pro profile root and permits only Home entry', async () => {
+  const skill = createCurrentYandexProPlannedSlotOrdersSkill();
+  const snapshot = profileRoot();
+  const context = skill.createContext({ inputs: { date: 'today' } });
+  const state = recognizeCurrentYandexProState(snapshot, context);
+  assert.equal(state, 'PROFILE_ROOT');
+
+  const directive = await skill.next({ state, snapshot, context, inputs: { date: 'today' } });
+  assert.deepEqual(directive, {
+    type: 'CLICK_HANDLE',
+    handle: 'home',
+    purpose: 'OPEN_HOME_ROOT',
+  });
+  assert.deepEqual(
+    await skill.validateDirective({ state, snapshot, directive, context, inputs: { date: 'today' } }),
+    { ok: true },
+  );
+  assert.deepEqual(
+    await skill.validateDirective({
+      state,
+      snapshot,
+      directive: { type: 'CLICK_HANDLE', handle: 'orders', purpose: 'OPEN_HOME_ROOT' },
+      context,
+      inputs: { date: 'today' },
+    }),
+    { ok: false },
+  );
+});
+
+test('profile root remains fail-closed when active work controls appear', () => {
+  assert.equal(
+    recognizeCurrentYandexProState(profileRoot([
+      { handle: 'active-order', enabled: true, clickable: true, content_description: 'Принять заказ' },
+    ])),
+    YandexProState.ACTIVE_OR_UNSAFE,
+  );
+});
 
 test('recognizes current expanded historical order list without legacy status/type block', () => {
   assert.equal(
@@ -125,7 +179,7 @@ test('current compatibility skill preserves the approved read-only identity', ()
   assert.equal(skill.id, 'yandex_pro.planned_slot_orders.read');
   assert.deepEqual(skill.safety, { effect: 'read_only', risk: 'R0' });
   assert.deepEqual(skill.packages, ['ru.yandex.taximeter']);
-  assert.equal(skill.version, 2);
+  assert.equal(skill.version, 3);
 });
 
 test('fresh run inside expanded order list backs out once to restore completed-slot proof', async () => {
