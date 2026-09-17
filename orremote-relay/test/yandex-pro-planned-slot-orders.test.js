@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createDefaultSkillSafetyPolicy } from '../src/skills/safety-policy.js';
 import {
   YandexProState,
   createYandexProPlannedSlotOrdersSkill,
@@ -23,6 +24,15 @@ const completedSlot = load('completed-slot.json');
 const slotOrders = load('slot-orders.json');
 const orderDetail = load('order-detail.json');
 const todayContext = (skill) => skill.createContext({ inputs: { date: 'today' } });
+
+test('declares the exact approved read-only safety contract', () => {
+  const skill = createYandexProPlannedSlotOrdersSkill();
+  assert.deepEqual(skill.safety, { effect: 'read_only', risk: 'R0' });
+  assert.deepEqual(
+    createDefaultSkillSafetyPolicy().authorizeSkill(skill, { inputs: { date: 'today' } }),
+    { ok: true },
+  );
+});
 
 test('recognizes the physical Yandex Pro state-machine fixtures', () => {
   assert.equal(recognizeYandexProState(home), YandexProState.HOME);
