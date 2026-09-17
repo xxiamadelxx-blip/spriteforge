@@ -83,6 +83,15 @@ function primitiveForDirective(directive, snapshot) {
           value: String(directive.value ?? ''),
         },
       };
+    case 'TAP_POINT':
+      return {
+        name: 'touch.tap',
+        args: {
+          expected_revision: revision,
+          x: Number(directive.x),
+          y: Number(directive.y),
+        },
+      };
     case 'SWIPE': {
       const args = {
         expected_revision: revision,
