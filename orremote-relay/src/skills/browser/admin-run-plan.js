@@ -12,6 +12,7 @@ const ADDRESS_HINT_PATTERN = /(?:url|address|search|omnibox|адрес|поис�
 const GO_PATTERN = /^(?:go|open|enter|ok|перейти|открыть|ввод|ок)$/iu;
 const OPERA_URL_FIELD_ID = 'com.opera.browser:id/url_field';
 const OPERA_EDITABLE_URL_FIELD_ID = 'com.opera.browser:id/editable_url_field';
+const OPERA_TOP_OMNIBAR_PLACEHOLDER_ID = 'com.opera.browser:id/top_omnibar_placeholder';
 const MAX_CAPTURE_CHARS = 20_000;
 
 function allNodes(snapshot) {
@@ -166,11 +167,14 @@ function boundedInteger(value, fallback, min, max) {
 }
 
 function addressBar(snapshot) {
-  const editable = allNodes(snapshot).filter((node) => node?.editable === true && enabled(node) && node?.sensitive !== true);
+  const nodes = allNodes(snapshot);
+  const editable = nodes.filter((node) => node?.editable === true && enabled(node) && node?.sensitive !== true);
   return editable.find((node) => node?.resource_id === OPERA_EDITABLE_URL_FIELD_ID)
     || editable.find((node) => node?.resource_id === OPERA_URL_FIELD_ID)
     || editable.find((node) => ADDRESS_HINT_PATTERN.test(nodeDescriptor(node)))
-    || (editable.length === 1 ? editable[0] : null);
+    || (editable.length === 1 ? editable[0] : null)
+    || nodes.find((node) => node?.resource_id === OPERA_TOP_OMNIBAR_PLACEHOLDER_ID && node?.clickable === true && enabled(node) && node?.sensitive !== true)
+    || null;
 }
 
 function goButton(snapshot) {
@@ -358,6 +362,9 @@ export function createBrowserAdminRunPlanSkill() {
         }
 
         if (context.navigation_phase === 'enter') {
+          if (bar.editable !== true) {
+            return stop('BROWSER_TARGET_NOT_EDITABLE', 'Opera focused address bar was not editable after focus.');
+          }
           return {
             type: 'SET_TEXT_HANDLE',
             handle: bar.handle,
