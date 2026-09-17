@@ -253,6 +253,10 @@ export function createYandexProPlannedSlotOrdersSkill({
     id: 'yandex_pro.planned_slot_orders.read',
     version: 1,
     packages: [YANDEX_PRO_PACKAGE],
+    safety: Object.freeze({
+      effect: 'read_only',
+      risk: 'R0',
+    }),
 
     createContext({ inputs = {} } = {}) {
       return {
