@@ -18,6 +18,18 @@ const ACTIVE_WORK_PATTERNS = [
 ];
 
 const PROOF_RECOVERY_PURPOSE = 'RESTORE_HISTORICAL_SLOT_PROOF';
+const REOBSERVABLE_READ_ONLY_PURPOSES = new Set([
+  'OPEN_YANDEX_PRO',
+  'OPEN_MONEY',
+  'OPEN_DAY',
+  'OPEN_COMPLETED_PLANNED_SLOT',
+  'EXPAND_HISTORICAL_ORDERS',
+  'OPEN_HISTORICAL_ORDER',
+  'RETURN_TO_ORDER_LIST',
+  'SEARCH_PLANNED_SLOT',
+  'SEARCH_MORE_ORDERS',
+  PROOF_RECOVERY_PURPOSE,
+]);
 
 function nodes(snapshot) {
   return Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
@@ -104,6 +116,13 @@ export function createCurrentYandexProPlannedSlotOrdersSkill(options) {
         return { ok: true };
       }
       return base.validateDirective(args);
+    },
+    async recoverPrimitiveError({ directive, error_code }) {
+      const transientSessionChange = error_code === 'SESSION_SUPERSEDED' || error_code === 'DEVICE_OFFLINE';
+      const approvedPurpose = REOBSERVABLE_READ_ONLY_PURPOSES.has(String(directive?.purpose || ''));
+      return {
+        reobserve: transientSessionChange && approvedPurpose,
+      };
     },
   });
 }
