@@ -99,8 +99,8 @@ function centerOfBounds(node) {
   if (![left, top, right, bottom].every(Number.isFinite)) return null;
   if (right <= left || bottom <= top) return null;
   return {
-    x: Math.floor((left + right) / 2),
-    y: Math.floor((top + bottom) / 2),
+    x: Math.round((left + right) / 2),
+    y: Math.round((top + bottom) / 2),
   };
 }
 
