@@ -14,6 +14,8 @@ const ANDROID_TOOLS = new Set([
 ]);
 
 const ALLOWED_TOOLS = new Set([...ANDROID_TOOLS, 'skill.run']);
+const CODEMAGIC_BUILD_URL = 'https://api.codemagic.io/builds';
+const CODEMAGIC_ALLOWED_BRANCH = 'ci/android-build';
 
 function asObject(text) {
   try {
@@ -114,6 +116,17 @@ export function createSupabaseCommandBus({
       p_error: {
         code: String(error?.code || 'ARTIFACT_FORWARD_FAILED'),
         message: String(error?.message || error || 'ARTIFACT_FORWARD_FAILED'),
+      },
+    });
+  }
+
+  async function failCiRequest(requestId, error) {
+    return rpc('orremote_fail_ci_request', {
+      p_bus_secret: config.orremoteBusSecret,
+      p_request_id: requestId,
+      p_error: {
+        code: String(error?.code || 'CODEMAGIC_BUILD_FAILED'),
+        message: String(error?.message || error || 'CODEMAGIC_BUILD_FAILED'),
       },
     });
   }
@@ -236,6 +249,67 @@ export function createSupabaseCommandBus({
     }
   }
 
+  async function processCiOnce() {
+    if (!enabled || !config.codemagicApiToken) return 'disabled';
+    const rows = await rpc('orremote_claim_ci_request', {
+      p_bus_secret: config.orremoteBusSecret,
+    });
+    if (!Array.isArray(rows) || rows.length === 0) return 'idle';
+    const request = rows[0];
+
+    try {
+      const branch = String(request.branch || '');
+      const workflowId = String(request.workflow_id || '');
+      const expectedCommit = String(request.expected_commit || '');
+      if (branch !== CODEMAGIC_ALLOWED_BRANCH) {
+        const error = new Error('CODEMAGIC_BRANCH_NOT_ALLOWED');
+        error.code = 'CODEMAGIC_BRANCH_NOT_ALLOWED';
+        throw error;
+      }
+      if (workflowId !== config.codemagicWorkflowId) {
+        const error = new Error('CODEMAGIC_WORKFLOW_NOT_ALLOWED');
+        error.code = 'CODEMAGIC_WORKFLOW_NOT_ALLOWED';
+        throw error;
+      }
+
+      const response = await fetchImpl(CODEMAGIC_BUILD_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-auth-token': config.codemagicApiToken,
+        },
+        body: JSON.stringify({
+          appId: config.codemagicAppId,
+          workflowId,
+          branch,
+          labels: expectedCommit ? ['orremote-ci-queue', `commit:${expectedCommit}`] : ['orremote-ci-queue'],
+        }),
+      });
+      const text = await response.text();
+      const parsed = text ? asObject(text) : {};
+      if (!response.ok) {
+        const error = new Error(`CODEMAGIC_BUILD_HTTP_${response.status}`);
+        error.code = `CODEMAGIC_BUILD_HTTP_${response.status}`;
+        throw error;
+      }
+      const buildId = String(parsed?.buildId || '');
+      if (!buildId) {
+        const error = new Error('CODEMAGIC_BUILD_ID_MISSING');
+        error.code = 'CODEMAGIC_BUILD_ID_MISSING';
+        throw error;
+      }
+      await rpc('orremote_start_ci_request', {
+        p_bus_secret: config.orremoteBusSecret,
+        p_request_id: request.request_id,
+        p_build_id: buildId,
+      });
+      return 'started';
+    } catch (error) {
+      await failCiRequest(request.request_id, error);
+      return 'failed';
+    }
+  }
+
   function schedule(delay) {
     if (!enabled || stopped) return;
     timer = setTimeout(async () => {
@@ -243,6 +317,7 @@ export function createSupabaseCommandBus({
       running = true;
       let commandOutcome = 'idle';
       let artifactOutcome = 'idle';
+      let ciOutcome = 'disabled';
       try {
         commandOutcome = await processOnce();
       } catch (error) {
@@ -252,11 +327,17 @@ export function createSupabaseCommandBus({
         artifactOutcome = await processArtifactOnce();
       } catch (error) {
         console.error('Supabase artifact bus poll failed', error?.message || error);
+      }
+      try {
+        ciOutcome = await processCiOnce();
+      } catch (error) {
+        console.error('Supabase CI bus poll failed', error?.message || error);
       } finally {
         running = false;
       }
-      const bothIdle = commandOutcome === 'idle' && artifactOutcome === 'idle';
-      schedule(bothIdle ? (config.orremoteBusPollMs || 1000) : 0);
+      const ciIdle = ciOutcome === 'idle' || ciOutcome === 'disabled';
+      const allIdle = commandOutcome === 'idle' && artifactOutcome === 'idle' && ciIdle;
+      schedule(allIdle ? (config.orremoteBusPollMs || 1000) : 0);
     }, Math.max(0, delay));
     timer.unref?.();
   }
@@ -276,6 +357,7 @@ export function createSupabaseCommandBus({
     enabled,
     processOnce,
     processArtifactOnce,
+    processCiOnce,
     registerPair,
     start,
     stop,
