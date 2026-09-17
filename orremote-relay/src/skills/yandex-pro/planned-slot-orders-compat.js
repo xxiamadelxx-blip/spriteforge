@@ -17,6 +17,8 @@ const ACTIVE_WORK_PATTERNS = [
   /начать\s+выполнение/i,
 ];
 
+const PROOF_RECOVERY_PURPOSE = 'RESTORE_HISTORICAL_SLOT_PROOF';
+
 function nodes(snapshot) {
   return Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
 }
@@ -56,6 +58,36 @@ export function createCurrentYandexProPlannedSlotOrdersSkill(options) {
     version: 2,
     recognize(snapshot) {
       return recognizeCurrentYandexProState(snapshot);
+    },
+    async next(args) {
+      const { state, context } = args;
+      if (
+        state === YandexProState.SLOT_ORDERS
+        && (context?.slot == null || context?.expectedOrderCount == null)
+      ) {
+        const attempts = Number(context?.compatProofRecoveryAttempts || 0);
+        if (attempts >= 1) {
+          return {
+            type: 'STOP',
+            error_code: 'HISTORICAL_SLOT_PROOF_RECOVERY_FAILED',
+            message: 'Historical slot proof could not be restored from the already-open order list.',
+          };
+        }
+        context.compatProofRecoveryAttempts = attempts + 1;
+        return { type: 'BACK', purpose: PROOF_RECOVERY_PURPOSE };
+      }
+      return base.next(args);
+    },
+    async validateDirective(args) {
+      const { state, directive } = args;
+      if (
+        state === YandexProState.SLOT_ORDERS
+        && directive?.type === 'BACK'
+        && directive?.purpose === PROOF_RECOVERY_PURPOSE
+      ) {
+        return { ok: true };
+      }
+      return base.validateDirective(args);
     },
   });
 }
