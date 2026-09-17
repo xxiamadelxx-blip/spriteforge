@@ -1,5 +1,5 @@
 const hook = 'https://api.codemagic.io/hooks/6aa6542caf15c45faf8dbe96';
-const targetSha = '492ec26e47abff23a04407343542a854b6aa6c25';
+const targetSha = 'a443348a29a5623ad76a9bdfc5001a7de893c48a';
 
 const payload = {
   ref: 'refs/heads/ci/android-build',
@@ -15,11 +15,11 @@ const payload = {
   },
   head_commit: {
     id: targetSha,
-    message: 'ci: trigger persistent relay reliability build',
+    message: 'ci: build final persistent relay candidate',
   },
   commits: [{
     id: targetSha,
-    message: 'ci: trigger persistent relay reliability build',
+    message: 'ci: build final persistent relay candidate',
   }],
   pusher: { name: 'xxiamadelxx-blip' },
   sender: { login: 'xxiamadelxx-blip' },
