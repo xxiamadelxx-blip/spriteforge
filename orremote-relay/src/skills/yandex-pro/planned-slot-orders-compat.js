@@ -17,9 +17,12 @@ const ACTIVE_WORK_PATTERNS = [
   /начать\s+выполнение/i,
 ];
 
+const PROFILE_ROOT_STATE = 'PROFILE_ROOT';
+const PROFILE_TO_HOME_PURPOSE = 'OPEN_HOME_ROOT';
 const PROOF_RECOVERY_PURPOSE = 'RESTORE_HISTORICAL_SLOT_PROOF';
 const REOBSERVABLE_READ_ONLY_PURPOSES = new Set([
   'OPEN_YANDEX_PRO',
+  PROFILE_TO_HOME_PURPOSE,
   'OPEN_MONEY',
   'OPEN_DAY',
   'OPEN_COMPLETED_PLANNED_SLOT',
@@ -43,6 +46,17 @@ function normalizedText(node) {
   return text(node).replace(/\s+/g, ' ').trim();
 }
 
+function enabledClickable(node) {
+  return node?.enabled !== false
+    && node?.clickable === true
+    && typeof node?.handle === 'string'
+    && node.handle.length > 0;
+}
+
+function findClickable(snapshot, pattern) {
+  return nodes(snapshot).find((node) => enabledClickable(node) && pattern.test(text(node))) || null;
+}
+
 function activeWorkDetected(snapshot) {
   return nodes(snapshot).some((node) => ACTIVE_WORK_PATTERNS.some((pattern) => pattern.test(text(node))));
 }
@@ -64,6 +78,18 @@ function hasPersistedCompletedPlannedProof(context) {
 
 function parsedOrderRows(snapshot) {
   return nodes(snapshot).filter((node) => node?.clickable === true && parseOrderRow(node) != null);
+}
+
+function looksLikeProfileRoot(snapshot) {
+  if (snapshot?.package !== YANDEX_PRO_PACKAGE || activeWorkDetected(snapshot)) return false;
+  const list = nodes(snapshot);
+  const hasTab = (pattern) => list.some((node) => enabledClickable(node) && pattern.test(text(node)));
+  const hasProfileMarker = list.some((node) => /^(курьер\s+еды|формат\s+дохода|тип\s+передвижения)$/i.test(text(node)));
+  return hasProfileMarker
+    && hasTab(/^главная$/i)
+    && hasTab(/^заказы$/i)
+    && hasTab(/^сообщения$/i)
+    && hasTab(/^профиль$/i);
 }
 
 function looksLikeExpandedHistoricalSlot(snapshot) {
@@ -91,6 +117,7 @@ function looksLikePersistedHistoricalViewport(snapshot, context) {
 export function recognizeCurrentYandexProState(snapshot, context = null) {
   const base = recognizeYandexProState(snapshot);
   if (base !== YandexProState.UNKNOWN) return base;
+  if (looksLikeProfileRoot(snapshot)) return PROFILE_ROOT_STATE;
   if (looksLikeExpandedHistoricalSlot(snapshot)) return YandexProState.SLOT_ORDERS;
   return looksLikePersistedHistoricalViewport(snapshot, context)
     ? YandexProState.SLOT_ORDERS
@@ -101,12 +128,23 @@ export function createCurrentYandexProPlannedSlotOrdersSkill(options) {
   const base = createYandexProPlannedSlotOrdersSkill(options);
   return Object.freeze({
     ...base,
-    version: 2,
+    version: 3,
     recognize(snapshot, context) {
       return recognizeCurrentYandexProState(snapshot, context);
     },
     async next(args) {
-      const { state, context } = args;
+      const { state, snapshot, context } = args;
+      if (state === PROFILE_ROOT_STATE) {
+        const target = findClickable(snapshot, /^главная$/i);
+        if (!target) {
+          return {
+            type: 'STOP',
+            error_code: 'SAFE_TARGET_NOT_FOUND',
+            message: 'Yandex Pro Home tab was not found from the proven profile root.',
+          };
+        }
+        return { type: 'CLICK_HANDLE', handle: target.handle, purpose: PROFILE_TO_HOME_PURPOSE };
+      }
       if (
         state === YandexProState.SLOT_ORDERS
         && (context?.slot == null || context?.expectedOrderCount == null)
@@ -125,7 +163,15 @@ export function createCurrentYandexProPlannedSlotOrdersSkill(options) {
       return base.next(args);
     },
     async validateDirective(args) {
-      const { state, directive } = args;
+      const { state, snapshot, directive } = args;
+      if (
+        state === PROFILE_ROOT_STATE
+        && directive?.type === 'CLICK_HANDLE'
+        && directive?.purpose === PROFILE_TO_HOME_PURPOSE
+      ) {
+        const target = nodes(snapshot).find((node) => node?.handle === directive.handle);
+        return { ok: Boolean(target && enabledClickable(target) && /^главная$/i.test(text(target))) };
+      }
       if (
         state === YandexProState.SLOT_ORDERS
         && directive?.type === 'BACK'
