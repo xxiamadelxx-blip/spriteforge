@@ -2,8 +2,27 @@ import { sanitizeVisibleUi } from '../visible-ui.js';
 import { createBrowserAdminRunPlanSkill } from './admin-run-plan.js';
 import { normalizeBrowserAdminExecutionInputs } from './policy-inputs.js';
 
+const OPERA_TOP_OMNIBAR_PLACEHOLDER_ID = 'com.opera.browser:id/top_omnibar_placeholder';
+
 function stop(error_code, message) {
   return { type: 'STOP', error_code, message };
+}
+
+function normalizeOperaStartPageSnapshot(snapshot) {
+  if (snapshot?.package !== 'com.opera.browser' || !Array.isArray(snapshot?.nodes)) return snapshot;
+  let changed = false;
+  const nodes = snapshot.nodes.map((node) => {
+    if (
+      node?.resource_id !== OPERA_TOP_OMNIBAR_PLACEHOLDER_ID
+      || node?.editable === true
+      || node?.sensitive === true
+    ) {
+      return node;
+    }
+    changed = true;
+    return { ...node, editable: true };
+  });
+  return changed ? { ...snapshot, nodes } : snapshot;
 }
 
 export function createBrowserAdminSkill() {
@@ -29,7 +48,7 @@ export function createBrowserAdminSkill() {
         context.index += 1;
         return { type: 'OBSERVE' };
       }
-      return base.next(args);
+      return base.next({ ...args, snapshot: normalizeOperaStartPageSnapshot(snapshot) });
     },
   });
 }
