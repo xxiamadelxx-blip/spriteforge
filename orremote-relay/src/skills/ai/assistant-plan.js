@@ -3,9 +3,16 @@ import { createNativeExactPlanSkill } from '../native/exact-plan.js';
 
 const FORBIDDEN_AI_ACTION_PATTERN = /(?:delete|remove|clear history|account|settings|subscription|upgrade|billing|payment|purchase|buy|sign out|log out|удал|очистить истор|аккаунт|настройк|подписк|тариф|оплат|купить|выйти из аккаунта)/iu;
 const SEND_PATTERN = /^(?:send|отправить)$/iu;
+const GEMINI_RUNTIME_PACKAGE = 'com.google.android.googlequicksearchbox';
 
 function providerPackage(provider) {
   return AI_ASSISTANT_APPS[String(provider || '').trim().toLowerCase()] || '';
+}
+
+function runtimePackages(provider, targetPackage) {
+  const values = new Set([String(targetPackage || '')].filter(Boolean));
+  if (String(provider || '').trim().toLowerCase() === 'gemini') values.add(GEMINI_RUNTIME_PACKAGE);
+  return values;
 }
 
 function nodes(snapshot) {
@@ -63,7 +70,8 @@ export function createAiAssistantPlanSkill() {
   return Object.freeze({
     ...base,
     createContext({ inputs = {} } = {}) {
-      const resolvedPackage = providerPackage(inputs.provider) || String(inputs.package || '');
+      const provider = String(inputs.provider || '').trim().toLowerCase();
+      const resolvedPackage = providerPackage(provider) || String(inputs.package || '');
       const context = base.createContext({
         inputs: {
           ...inputs,
@@ -72,14 +80,32 @@ export function createAiAssistantPlanSkill() {
       });
       return {
         ...context,
+        ai_provider: provider,
+        ai_runtime_packages: runtimePackages(provider, resolvedPackage),
+        ai_pending_launch_proof: false,
         ai_pending_text_proof: null,
         ai_pending_send_proof: null,
         ai_last_prompt: null,
         ai_composer_selector: null,
       };
     },
+    recognize(snapshot, context) {
+      return context?.ai_runtime_packages?.has(String(snapshot?.package || ''))
+        ? 'TARGET_APP'
+        : 'OTHER_APP';
+    },
     async next(args) {
       const { snapshot, context } = args;
+
+      if (context?.ai_pending_launch_proof) {
+        if (!context.ai_runtime_packages?.has(String(snapshot?.package || ''))) {
+          return stop(
+            'AI_LAUNCH_NOT_VERIFIED',
+            'AI launch was dispatched but the expected provider surface was not proven by a fresh observation.',
+          );
+        }
+        context.ai_pending_launch_proof = false;
+      }
 
       if (context?.ai_pending_text_proof) {
         const pending = context.ai_pending_text_proof;
@@ -119,6 +145,11 @@ export function createAiAssistantPlanSkill() {
       const { directive, primitiveResult, context } = args;
       const body = primitiveBody(primitiveResult);
       const step = context?.steps?.[context?.index];
+
+      if (directive?.type === 'LAUNCH' && body?.error_code === 'APP_LAUNCH_NOT_VERIFIED') {
+        context.ai_pending_launch_proof = true;
+        return { handled_error: true };
+      }
 
       if (directive?.type === 'SET_TEXT_HANDLE') {
         const selector = step?.type === 'SET_TEXT_EXACT_SELECTOR' ? step.selector : null;
