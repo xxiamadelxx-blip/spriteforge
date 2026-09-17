@@ -188,6 +188,13 @@ function goButton(snapshot) {
   return null;
 }
 
+function primitiveBody(result) {
+  if (!result || typeof result !== 'object') return {};
+  return result.structuredContent && typeof result.structuredContent === 'object'
+    ? result.structuredContent
+    : result;
+}
+
 export function createBrowserAdminRunPlanSkill() {
   return Object.freeze({
     id: 'browser.admin.run_plan',
@@ -425,10 +432,14 @@ export function createBrowserAdminRunPlanSkill() {
       return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Browser skill emitted an unsupported directive.' };
     },
 
-    async acceptResult({ directive, context }) {
+    async acceptResult({ directive, primitiveResult, context }) {
       if (directive.type === 'LAUNCH') return true;
       if (directive.navigation_focus === true) {
         context.navigation_phase = 'enter';
+        const body = primitiveBody(primitiveResult);
+        if (body?.error_code === 'ACTION_NOT_VERIFIED') {
+          return { handled_error: true };
+        }
         return true;
       }
       if (directive.navigation_enter === true) {
