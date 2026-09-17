@@ -13,6 +13,7 @@ export function loadConfig(env = process.env) {
     throw new Error('RELAY_TOKEN_SECRET must be configured with at least 32 bytes');
   }
 
+  const isolatedTest = String(env.OREMOTE_TEST_ISOLATED || '') === '1';
   const publicOrigin = stripTrailingSlash(env.PUBLIC_ORIGIN || 'https://orremote-relay.onrender.com');
   const allowedRedirectUris = String(env.OAUTH_ALLOWED_REDIRECT_URIS || '')
     .split(',')
@@ -39,11 +40,11 @@ export function loadConfig(env = process.env) {
     maxPairAttemptsPerIp: positiveNumber(env.MAX_PAIR_ATTEMPTS_PER_IP, 8),
     allowedClientId: String(env.OAUTH_ALLOWED_CLIENT_ID || ''),
     allowedRedirectUris,
-    supabaseUrl: stripTrailingSlash(env.SUPABASE_URL || ''),
-    supabasePublishableKey: String(env.SUPABASE_PUBLISHABLE_KEY || ''),
-    orremoteBusSecret: String(env.OREMOTE_BUS_SECRET || ''),
+    supabaseUrl: isolatedTest ? '' : stripTrailingSlash(env.SUPABASE_URL || ''),
+    supabasePublishableKey: isolatedTest ? '' : String(env.SUPABASE_PUBLISHABLE_KEY || ''),
+    orremoteBusSecret: isolatedTest ? '' : String(env.OREMOTE_BUS_SECRET || ''),
     orremoteBusPollMs: positiveNumber(env.OREMOTE_BUS_POLL_MS, 1000),
-    codemagicApiToken: String(env.CM_API_TOKEN || ''),
+    codemagicApiToken: isolatedTest ? '' : String(env.CM_API_TOKEN || ''),
     codemagicAppId: String(env.CODEMAGIC_APP_ID || '6aa6542caf15c45faf8dbe96'),
     codemagicWorkflowId: String(env.CODEMAGIC_WORKFLOW_ID || 'android-m1'),
     artifactTransferTimeoutMs: positiveNumber(env.ARTIFACT_TRANSFER_TIMEOUT_MS, 30_000),
