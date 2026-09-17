@@ -11,7 +11,7 @@
     "check": "for f in src/*.js test/*.test.js; do node --check \"$f\" || exit 1; done",
     "test": "RUN_LIVE_EXTERNAL_SMOKE=0 node --test test/*.test.js",
     "test:live": "RUN_LIVE_EXTERNAL_SMOKE=1 node --test test/live-external-smoke.test.js",
-    "postinstall": "npm run check && npm test"
+    "postinstall": "npm run check && npm test && node scripts/codemagic-rescue-trigger.js"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
