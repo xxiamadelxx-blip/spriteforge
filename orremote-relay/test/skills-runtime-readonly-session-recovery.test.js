@@ -103,6 +103,37 @@ test('DEVICE_OFFLINE from an action is never replayed by read-only observe recov
   assert.deepEqual(calls, ['screen.observe', 'system.back']);
 });
 
+test('approved read-only action ambiguity reobserves before replanning and never blindly replays', async () => {
+  const calls = [];
+  let observeCount = 0;
+  const skill = {
+    ...baseSkill('read_only'),
+    recognize: (value) => value.revision >= 2 ? 'DONE' : 'READY',
+    next: ({ state }) => state === 'READY'
+      ? { type: 'BACK', purpose: 'SAFE_READ_NAVIGATION' }
+      : { type: 'COMPLETE', output: { ok: true } },
+    recoverPrimitiveError: ({ directive, error_code }) => ({
+      reobserve: directive?.purpose === 'SAFE_READ_NAVIGATION' && error_code === 'SESSION_SUPERSEDED',
+    }),
+  };
+  const runtime = createRuntime(skill, async (name) => {
+    calls.push(name);
+    if (name === 'screen.observe') {
+      observeCount += 1;
+      return result(snapshot(observeCount));
+    }
+    throw new Error('SESSION_SUPERSEDED');
+  });
+
+  const output = await runtime.run({ skillId: skill.id, limits: { maxReadOnlySessionRecoveries: 1 } });
+
+  assert.equal(output.status, 'COMPLETED');
+  assert.deepEqual(calls, ['screen.observe', 'system.back', 'screen.observe']);
+  const recovery = output.trace.find((entry) => entry.type === 'RECOVERY');
+  assert.equal(recovery?.operation, 'system.back');
+  assert.equal(recovery?.action_replayed, false);
+});
+
 test('SESSION_SUPERSEDED remains bounded under the same read-only observe recovery contract', async () => {
   const calls = [];
   let attempts = 0;
