@@ -312,6 +312,44 @@ export function createSkillRuntime({
             { deviceId, pairId, skillId, state },
           );
         } catch (error) {
+          const recoveryCode = readOnlyObserveRecoveryCode(error);
+          if (
+            skill?.safety?.effect === 'read_only'
+            && recoveryCode != null
+            && readOnlySessionRecoveries < effective.maxReadOnlySessionRecoveries
+            && typeof skill.recoverPrimitiveError === 'function'
+          ) {
+            let recovery = null;
+            try {
+              recovery = await skill.recoverPrimitiveError({
+                state,
+                snapshot,
+                directive,
+                primitive,
+                error,
+                error_code: recoveryCode,
+                context,
+                inputs,
+              });
+            } catch {
+              recovery = null;
+            }
+            if (recovery?.reobserve === true) {
+              readOnlySessionRecoveries += 1;
+              transitions += 1;
+              trace.push({
+                type: 'RECOVERY',
+                recovery: recoveryCode,
+                operation: primitive.name,
+                directive: directive.type,
+                purpose: directive.purpose ?? null,
+                attempt: readOnlySessionRecoveries,
+                action_replayed: false,
+              });
+              await sleep(SESSION_RECOVERY_DELAY_MS);
+              continue;
+            }
+          }
           return stopped(
             'SKILL_PRIMITIVE_FAILED',
             String(error?.message || error || `${primitive.name} failed`),
