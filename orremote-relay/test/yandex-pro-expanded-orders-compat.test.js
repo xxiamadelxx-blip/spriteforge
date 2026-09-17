@@ -38,6 +38,24 @@ function scrolledCompletedOrders(details = 'Детали\nСтатус\nЗаве
   };
 }
 
+function scrolledRowsOnly(extraNodes = []) {
+  return {
+    package: 'ru.yandex.taximeter',
+    revision: 76,
+    nodes: [
+      { handle: 'row-c', enabled: true, clickable: true, content_description: '12:58\nТеремок\n100,00 ₽\nкоэф 1.0' },
+      { handle: 'row-d', enabled: true, clickable: true, content_description: '13:14\nПятёрочка\n100,00 ₽\nкоэф 1.0' },
+      { handle: 'row-e', enabled: true, clickable: true, content_description: '13:41\nBurger King\n100,00 ₽\nкоэф 1.0' },
+      ...extraNodes,
+    ],
+  };
+}
+
+const persistedProof = {
+  slot: { status: 'completed', type: 'planned' },
+  expectedOrderCount: 15,
+};
+
 test('recognizes current expanded historical order list without legacy status/type block', () => {
   assert.equal(
     recognizeCurrentYandexProState(expandedOrders()),
@@ -64,6 +82,26 @@ test('scrolled compatibility stays unknown when completed planned-slot proof is 
       'Детали\nСтатус\nЗавершён\nТип слота\nСвободный',
     )),
     YandexProState.UNKNOWN,
+  );
+});
+
+test('persisted completed planned-slot proof keeps SLOT_ORDERS after headers scroll off-screen', () => {
+  assert.equal(
+    recognizeCurrentYandexProState(scrolledRowsOnly(), persistedProof),
+    YandexProState.SLOT_ORDERS,
+  );
+  assert.equal(
+    recognizeCurrentYandexProState(scrolledRowsOnly()),
+    YandexProState.UNKNOWN,
+  );
+});
+
+test('persisted proof never overrides an active-work control', () => {
+  assert.equal(
+    recognizeCurrentYandexProState(scrolledRowsOnly([
+      { handle: 'active-order', enabled: true, clickable: true, content_description: 'Принять заказ' },
+    ]), persistedProof),
+    YandexProState.ACTIVE_OR_UNSAFE,
   );
 });
 
