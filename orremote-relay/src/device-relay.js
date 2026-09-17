@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createCredential, verifyCredential } from './credentials.js';
 import { createArtifactBroker } from './artifact-broker.js';
+import { shouldTerminateForStalePong } from './device-liveness.js';
 
 function relayError(code, status) {
   const error = new Error(code);
@@ -138,6 +139,7 @@ export function createDeviceRelay(config) {
     state.authenticated = true;
     state.sessionEpoch = nextEpoch;
     state.challenge = null;
+    state.lastPongAt = Date.now();
     connectedDevices.set(state.deviceId, { ws, epoch: nextEpoch, connectedAt: Date.now() });
     ws.send(JSON.stringify({
       type: 'authenticated',
@@ -212,7 +214,10 @@ export function createDeviceRelay(config) {
       return;
     }
 
-    if (message.type === 'pong') return;
+    if (message.type === 'pong') {
+      state.lastPongAt = Date.now();
+      return;
+    }
   }
 
   function handleUpgrade(req, socket, head) {
@@ -245,6 +250,7 @@ export function createDeviceRelay(config) {
         authenticated: false,
         sessionEpoch: null,
         challenge: null,
+        lastPongAt: null,
       };
       wss.emit('connection', ws, req);
     });
@@ -270,10 +276,21 @@ export function createDeviceRelay(config) {
   const heartbeat = setInterval(() => {
     cleanupExpiredPairs();
     artifactBroker.cleanupExpiredStages();
+    const now = Date.now();
     for (const { ws } of connectedDevices.values()) {
-      if (ws.readyState === WebSocket.OPEN) {
-        try { ws.send(JSON.stringify({ type: 'ping', at: Date.now() })); } catch {}
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      const state = ws.orremote;
+      if (
+        shouldTerminateForStalePong({
+          authenticated: state?.authenticated === true,
+          lastPongAt: Number(state?.lastPongAt),
+          now,
+        })
+      ) {
+        try { ws.terminate(); } catch {}
+        continue;
       }
+      try { ws.send(JSON.stringify({ type: 'ping', at: now })); } catch {}
     }
   }, 25_000);
   heartbeat.unref();
