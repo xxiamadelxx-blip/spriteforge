@@ -136,3 +136,30 @@ test('empty Downloads completes only after one bounded no-progress scroll', asyn
   assert.equal(complete.type, 'COMPLETE');
   assert.deepEqual(complete.output.apks, []);
 });
+
+
+test('Files search swipe is derived from the observed semantic viewport', async () => {
+  const skill = createFilesDownloadsApksSkill({ maxDownloadScrolls: 2 });
+  const context = skill.createContext();
+  const largeDownloads = {
+    ...downloads,
+    revision: 40,
+    nodes: [
+      node({ handle: 'root', depth: 0, bounds: { left: 0, top: 0, right: 1000, bottom: 2000 } }),
+      node({ text: 'Загрузки', depth: 2 }),
+      node({ class_name: 'android.widget.GridView', resource_id: 'com.google.android.apps.nbu.files:id/file_list', depth: 4 }),
+      node({ text: 'photo.jpg', depth: 8 }),
+    ],
+  };
+
+  const swipe = await skill.next({ state: FilesState.DOWNLOADS, snapshot: largeDownloads, context });
+  assert.deepEqual(swipe, {
+    type: 'SWIPE',
+    start_x: 500,
+    start_y: 1560,
+    end_x: 500,
+    end_y: 760,
+    duration_ms: 350,
+    purpose: 'SEARCH_APKS',
+  });
+});
