@@ -12,6 +12,7 @@ const ALLOWED_STEP_TYPES = new Set([
   'WAIT_FOR_EXACT_SELECTOR',
   'CAPTURE_EXACT_SELECTOR_TEXT',
   'CAPTURE_VISIBLE_UI',
+  'SEEK_EXACT_SELECTOR_FRACTION',
 ]);
 
 function denied(code, message) {
@@ -64,6 +65,15 @@ export function authorizeMediaPlaybackSkill(skill, { inputs = {} } = {}) {
     }
     if (type === 'CAPTURE_EXACT_SELECTOR_TEXT' && AUTH_FIELD_PATTERN.test(label)) {
       return denied('USER_AUTH_REQUIRED', 'Sensitive media content cannot be captured.');
+    }
+    if (type === 'SEEK_EXACT_SELECTOR_FRACTION') {
+      const fraction = Number(step?.fraction);
+      if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
+        return denied('SKILL_ACTION_NOT_ALLOWED', 'Playback seek fraction must be between 0 and 1.');
+      }
+      if (!step?.selector || AUTH_FIELD_PATTERN.test(label) || PERSISTENT_OR_COMMERCIAL_PATTERN.test(label)) {
+        return denied('SKILL_ACTION_NOT_ALLOWED', 'Playback seek requires a bounded non-sensitive semantic selector.');
+      }
     }
   }
   return { ok: true };
