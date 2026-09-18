@@ -87,3 +87,22 @@ test('delivery cart policy does not enter account or sign-in controls', () => {
     assert.equal(result.code, 'SKILL_ACTION_NOT_ALLOWED');
   }
 });
+
+
+test('delivery cart planner itself rejects address text entry', async () => {
+  const context = skill.createContext({
+    inputs: {
+      provider: 'samokat',
+      steps: [{
+        type: 'SET_TEXT_EXACT_SELECTOR',
+        selector: { kind: 'RESOURCE_ID', value: 'delivery_address' },
+        value: 'some address',
+        sensitive: false,
+      }],
+    },
+  });
+  const snapshot = { package: 'ru.sbcs.store', revision: 2, nodes: [] };
+  const directive = await skill.next({ state: 'TARGET_APP', snapshot, context });
+  assert.equal(directive.type, 'STOP');
+  assert.equal(directive.error_code, 'SKILL_ACTION_NOT_ALLOWED');
+});
