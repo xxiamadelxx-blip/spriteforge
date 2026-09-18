@@ -95,13 +95,29 @@ export function recognizeSettingsState(snapshot) {
   return SettingsState.UNKNOWN;
 }
 
-function safeScroll() {
+function viewport(snapshot) {
+  const visibleBounds = nodes(snapshot)
+    .map((node) => node?.bounds)
+    .filter((bounds) => (
+      bounds
+      && Number.isFinite(Number(bounds.right))
+      && Number.isFinite(Number(bounds.bottom))
+    ));
+  return {
+    width: Math.max(1, ...visibleBounds.map((bounds) => Number(bounds.right))),
+    height: Math.max(1, ...visibleBounds.map((bounds) => Number(bounds.bottom))),
+  };
+}
+
+function safeScroll(snapshot) {
+  const { width, height } = viewport(snapshot);
+  const x = Math.max(1, Math.floor(width * 0.5));
   return {
     type: 'SWIPE',
-    start_x: 540,
-    start_y: 1900,
-    end_x: 540,
-    end_y: 700,
+    start_x: x,
+    start_y: Math.max(1, Math.floor(height * 0.78)),
+    end_x: x,
+    end_y: Math.max(1, Math.floor(height * 0.38)),
     duration_ms: 350,
     purpose: 'SEARCH_DEVICE_INFO',
   };
@@ -150,7 +166,7 @@ export function createSettingsDeviceInfoSkill({ maxHomeScrolls = 6 } = {}) {
           };
         }
         context.homeScrolls += 1;
-        return safeScroll();
+        return safeScroll(snapshot);
       }
 
       if (state === SettingsState.DEVICE_INFO) {
