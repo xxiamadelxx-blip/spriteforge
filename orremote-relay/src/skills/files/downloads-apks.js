@@ -47,6 +47,31 @@ export function parseVisibleApks(snapshot) {
   return result;
 }
 
+function viewportSignature(snapshot) {
+  return nodes(snapshot)
+    .map((node) => [
+      node?.text,
+      node?.content_description,
+      node?.resource_id,
+    ].map((value) => String(value ?? '')).join('|'))
+    .join('\n');
+}
+
+function rememberVisibleApks(context, snapshot) {
+  const seen = context.apksByName || (context.apksByName = {});
+  for (const apk of parseVisibleApks(snapshot)) {
+    const previous = seen[apk.name];
+    seen[apk.name] = {
+      name: apk.name,
+      metadata: apk.metadata ?? previous?.metadata ?? null,
+    };
+  }
+}
+
+function collectedApks(context) {
+  return Object.values(context.apksByName || {});
+}
+
 export function recognizeFilesState(snapshot) {
   if (snapshot?.package !== FILES_PACKAGE) return FilesState.UNKNOWN;
   if (
@@ -79,7 +104,11 @@ export function createFilesDownloadsApksSkill({ maxDownloadScrolls = 5 } = {}) {
     safety: Object.freeze({ effect: 'read_only', risk: 'R0' }),
 
     createContext() {
-      return { downloadScrolls: 0 };
+      return {
+        downloadScrolls: 0,
+        apksByName: {},
+        lastViewportSignature: null,
+      };
     },
 
     recognize(snapshot) {
@@ -107,13 +136,16 @@ export function createFilesDownloadsApksSkill({ maxDownloadScrolls = 5 } = {}) {
       }
 
       if (state === FilesState.DOWNLOADS) {
-        const apks = parseVisibleApks(snapshot);
-        if (apks.length > 0) {
-          return { type: 'COMPLETE', output: { apks } };
+        rememberVisibleApks(context, snapshot);
+        const signature = viewportSignature(snapshot);
+        const noProgress = context.downloadScrolls > 0
+          && context.lastViewportSignature === signature;
+        context.lastViewportSignature = signature;
+
+        if (noProgress || context.downloadScrolls >= maxDownloadScrolls) {
+          return { type: 'COMPLETE', output: { apks: collectedApks(context) } };
         }
-        if (context.downloadScrolls >= maxDownloadScrolls) {
-          return { type: 'COMPLETE', output: { apks: [] } };
-        }
+
         context.downloadScrolls += 1;
         return searchSwipe();
       }
