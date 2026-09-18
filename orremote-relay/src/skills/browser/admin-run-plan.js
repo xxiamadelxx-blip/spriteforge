@@ -249,6 +249,14 @@ export function createBrowserAdminRunPlanSkill() {
         return safeScrollDirective(snapshot, stepIndex);
       }
 
+      if (step.type === 'BROWSER_BACK') {
+        return {
+          type: 'BACK',
+          step_index: stepIndex,
+          browser_back: true,
+        };
+      }
+
       if (step.type === 'WAIT_FOR_EXACT_SELECTOR') {
         const target = findExactNode(snapshot, step.selector);
         if (target) {
@@ -429,6 +437,7 @@ export function createBrowserAdminRunPlanSkill() {
         return { ok: true };
       }
       if (directive.type === 'SWIPE') return { ok: true };
+      if (directive.type === 'BACK' && directive.browser_back === true) return { ok: true };
       return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Browser skill emitted an unsupported directive.' };
     },
 
