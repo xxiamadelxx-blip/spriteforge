@@ -1,4 +1,4 @@
-const AUTH_PATTERN = /(?:password|passcode|pin|otp|2fa|verification code|security code|api[ _-]?token|access[ _-]?token|secret|private key|cvv|cvc|card number|парол|пин|код подтверж|однораз|токен|секрет)/iu;
+const AUTH_PATTERN = /(?:\bpassword\b|\bpasscode\b|\bpin\b|\botp\b|\b2fa\b|\bmfa\b|two factor|multi factor|verification code|security code|api (?:key|token)|access token|\bsecret\b|private key|\bcvv\b|\bcvc\b|card number|\bcredential\b|\bpasskey\b|\boauth\b|\bpermission\b|\bbiometric(?:s)?\b|\bcaptcha\b|парол\p{L}*|\bпин\b|код подтверж|однораз|\bтокен\b|секрет\p{L}*)/iu;
 const MAX_CAPTURE_CHARS = 20_000;
 
 function allNodes(snapshot) {
@@ -9,6 +9,12 @@ function descriptor(node) {
   return [node?.text, node?.content_description, node?.resource_id, node?.class_name]
     .filter(Boolean)
     .join(' ');
+}
+
+function authDescriptor(node) {
+  return descriptor(node)
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
 }
 
 function enabled(node) {
@@ -40,6 +46,33 @@ function semanticDescriptor(snapshot, root) {
   const parts = [descriptor(root)];
   for (const candidate of descendants(snapshot, root)) {
     parts.push(descriptor(candidate));
+  }
+  return parts.filter(Boolean).join(' ');
+}
+
+function actionLabelDescriptor(node) {
+  return [node?.text, node?.content_description, node?.resource_id]
+    .filter(Boolean)
+    .join(' ');
+}
+
+const READ_ONLY_STATE_METADATA_PATTERN = /(?:\b\d[\d\s.,]*\s*(?:likes?|followers?|views?)\b|(?:added|saved)\s+(?:to|in)\s+(?:your\s+)?collection|\b(?:likes?|followers?|views?)\b|лайк\p{L}*|(?:добавлено|сохранено)\s+в\s+коллекц)/iu;
+
+function controlDescriptor(snapshot, root) {
+  const nested = descendants(snapshot, root);
+  const parts = [descriptor(root)];
+  const clickableChildren = nested.filter((candidate) => candidate?.clickable === true && enabled(candidate));
+  clickableChildren.forEach((candidate) => parts.push(descriptor(candidate)));
+
+  // A generic container with one textual label is a control that owns that label
+  // (for example, a checkout button). A discovery card with several read-only
+  // metadata fields is not promoted to a persistent action by one descendant.
+  if (clickableChildren.length === 0) {
+    const labels = nested
+      .map(actionLabelDescriptor)
+      .filter(Boolean)
+      .filter((label) => !READ_ONLY_STATE_METADATA_PATTERN.test(label));
+    if (labels.length === 1) parts.push(labels[0]);
   }
   return parts.filter(Boolean).join(' ');
 }
@@ -133,9 +166,11 @@ function stop(error_code, message) {
 }
 
 function sensitive(snapshot, node) {
-  return node?.sensitive === true
-    || descendants(snapshot, node).some((candidate) => candidate?.sensitive === true)
-    || AUTH_PATTERN.test(semanticDescriptor(snapshot, node));
+  if (node?.sensitive === true || AUTH_PATTERN.test(authDescriptor(node))) return true;
+  return descendants(snapshot, node).some((candidate) => (
+    candidate?.sensitive === true
+    || (candidate?.editable === true && AUTH_PATTERN.test(authDescriptor(candidate)))
+  ));
 }
 
 function captureText(snapshot, root) {
@@ -171,7 +206,7 @@ export function createNativeExactPlanSkill({
   const allowedSet = new Set(allowedPackages);
   const dangerous = forbiddenClickPattern instanceof RegExp ? forbiddenClickPattern : null;
 
-  const isDangerous = (snapshot, node) => dangerous ? dangerous.test(semanticDescriptor(snapshot, node)) : false;
+  const isDangerous = (snapshot, node) => dangerous ? dangerous.test(controlDescriptor(snapshot, node)) : false;
 
   return Object.freeze({
     id,

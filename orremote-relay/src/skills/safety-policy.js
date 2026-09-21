@@ -51,7 +51,7 @@ const DEFAULT_APPROVED_SKILLS = Object.freeze({
 
 const AUTH_FIELD_PATTERN = /(?:password|passcode|pin|otp|2fa|two[- ]?factor|verification code|security code|api[ _-]?token|access[ _-]?token|secret|private key|cvv|cvc|card number|парол|пин|код подтверж|однораз|токен|секрет)/iu;
 const FORBIDDEN_BROWSER_CLICK_PATTERN = /(?:delete|remove|revoke|rotate|billing|pay now|purchase|checkout|buy now|reset pairing|удал|отозв|ротац|оплат|купить|оформить заказ|сбросить pairing)/iu;
-const FORBIDDEN_MEDIA_CLICK_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|sign in|log in|login|account|мне нравится|лайк|избран|подпис|скачать|купить|аренд|удал|войти|аккаунт|авторизац)/iu;
+const FORBIDDEN_MEDIA_CLICK_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|collection|sign in|log in|login|account|мне нравится|лайк|избран|коллекц|подпис|скачать|купить|аренд|удал|войти|аккаунт|авторизац)/iu;
 const FORBIDDEN_DELIVERY_CLICK_PATTERN = /(?:checkout|place order|confirm order|pay|payment|buy now|purchase|cancel order|delivery address|shipping address|change address|choose address|current location|sign in|log in|login|account|оформить заказ|подтвердить заказ|оплат|заказать|купить|отменить заказ|способ оплаты|карта|адрес доставки|изменить адрес|выбрать адрес|текущее местоположение|геолокац|геопозици|подъезд|квартир|этаж|войти|аккаунт|авторизац)/iu;
 const DELIVERY_ADDRESS_OR_LOCATION_PATTERN = /(?:(?:delivery|shipping)[_\s-]*address|(?:change|choose)[_\s-]*address|current[_\s-]*location|(?:^|[_\s-])address(?:$|[_\s-])|адрес(?: доставки)?|изменить[_\s-]*адрес|выбрать[_\s-]*адрес|место[_\s-]*доставки|текущее[_\s-]*местоположение|геолокац|геопозици|подъезд|квартир|этаж)/iu;
 

@@ -2,7 +2,7 @@ import { MEDIA_DISCOVERY_PACKAGES } from '../catalogs/device-apps.js';
 import { createNativeDiscoverablePlanSkill } from '../native/augmented-exact-plan.js';
 import { mediaProfileById } from './app-profiles.js';
 
-const MEDIA_PERSISTENT_ACTION_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|sign in|log in|login|account|мне нравится|лайк|избран|подпис|скачать|купить|аренд|удал|войти|аккаунт|авторизац)/iu;
+const MEDIA_PERSISTENT_ACTION_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|collection|sign in|log in|login|account|мне нравится|лайк|избран|коллекц|подпис|скачать|купить|аренд|удал|войти|аккаунт|авторизац)/iu;
 
 export function createMediaDiscoveryPlanSkill() {
   const base = createNativeDiscoverablePlanSkill({

@@ -1,8 +1,8 @@
 import { mediaProfileById } from './app-profiles.js';
 import { MEDIA_PLAYBACK_PACKAGES } from './playback-plan.js';
 
-const PLAYBACK_ACTION_PATTERN = /(?:\bplay\b|\bpause\b|\bresume\b|continue watching|watch now|\blisten\b|\bnext\b|\bprevious\b|\breplay\b|воспроизвести|пауза|продолжить просмотр|продолжить слушать|смотреть|слушать|следующ|предыдущ|повторить)/iu;
-const PERSISTENT_OR_COMMERCIAL_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|account|billing|payment|мне нравится|лайк|избран|подпис|скачать|купить|аренд|удал|аккаунт|оплат)/iu;
+const PLAYBACK_ACTION_PATTERN = /(?:\bplay\b|\bpause\b|\bresume\b|play[_\s-]?pause|continue watching|watch now|\blisten\b|\bnext\b|\bprevious\b|\breplay\b|\brewind\b|\bforward\b|воспроизвести|пауз\p{L}*|продолжить просмотр|продолжить слушать|смотреть|слушать|следующ|предыдущ|повторить|перемот)/iu;
+const PERSISTENT_OR_COMMERCIAL_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|collection|account|billing|payment|мне нравится|лайк|избран|коллекц|подпис|скачать|купить|аренд|удал|аккаунт|оплат)/iu;
 const AUTH_FIELD_PATTERN = /(?:password|passcode|pin|otp|2fa|verification code|security code|api[ _-]?token|access[ _-]?token|secret|private key|cvv|cvc|card number|парол|пин|код подтверж|однораз|токен|секрет)/iu;
 const ALLOWED_STEP_TYPES = new Set([
   'CLICK_EXACT_TEXT',

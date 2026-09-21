@@ -132,3 +132,143 @@ test('media playback seek fails closed on non-seek semantic targets', async () =
   assert.equal(directive.type, 'STOP');
   assert.equal(directive.error_code, 'MEDIA_SEEK_TARGET_NOT_ALLOWED');
 });
+
+
+test('media playback accepts a pause child owned by a clickable playback ancestor', async () => {
+  const skill = createMediaPlaybackPlanSkill();
+  const playerSnapshot = {
+    package: 'ru.kinopoisk',
+    revision: 12,
+    nodes: [
+      {
+        handle: 'play-pause',
+        resource_id: 'play_pause',
+        class_name: 'PlayerControlsView',
+        clickable: true,
+        editable: false,
+        enabled: true,
+        sensitive: false,
+        depth: 1,
+        bounds: { left: 400, top: 900, right: 680, bottom: 1120 },
+      },
+      {
+        handle: 'pause-label',
+        content_description: 'Поставить на паузу',
+        class_name: 'PlayerPauseImage',
+        clickable: false,
+        editable: false,
+        enabled: true,
+        sensitive: false,
+        depth: 2,
+        bounds: { left: 440, top: 940, right: 640, bottom: 1080 },
+      },
+    ],
+  };
+  const context = skill.createContext({
+    inputs: {
+      provider: 'kinopoisk',
+      steps: [{
+        type: 'CLICK_EXACT_SELECTOR',
+        selector: { kind: 'CONTENT_DESCRIPTION', value: 'Поставить на паузу' },
+      }],
+    },
+  });
+  const directive = await skill.next({ state: 'TARGET_APP', snapshot: playerSnapshot, context });
+  assert.deepEqual(directive, { type: 'CLICK_HANDLE', handle: 'play-pause', step_index: 0 });
+  assert.deepEqual(
+    await skill.validateDirective({ snapshot: playerSnapshot, directive, context }),
+    { ok: true },
+  );
+});
+
+test('media playback accepts bounded rewind, forward, and timeline seek controls', async () => {
+  const skill = createMediaPlaybackPlanSkill();
+  for (const [handle, resourceId, label] of [
+    ['rewind-back', 'PlayerRewindBackwardButton', 'Перемотать на 10 секунд назад'],
+    ['rewind-forward', 'PlayerRewindForwardButton', 'Перемотать на 10 секунд вперед'],
+  ]) {
+    const snapshot = {
+      package: 'ru.kinopoisk',
+      revision: 13,
+      nodes: [{
+        handle,
+        resource_id: resourceId,
+        content_description: label,
+        clickable: true,
+        editable: false,
+        enabled: true,
+        sensitive: false,
+        depth: 1,
+        bounds: { left: 0, top: 0, right: 120, bottom: 120 },
+      }],
+    };
+    const context = skill.createContext({
+      inputs: {
+        provider: 'kinopoisk',
+        steps: [{ type: 'CLICK_EXACT_SELECTOR', selector: { kind: 'HANDLE', value: handle } }],
+      },
+    });
+    const directive = await skill.next({ state: 'TARGET_APP', snapshot, context });
+    assert.equal(directive.type, 'CLICK_HANDLE', label);
+    assert.deepEqual(await skill.validateDirective({ snapshot, directive, context }), { ok: true }, label);
+  }
+
+  const timelineSnapshot = {
+    package: 'ru.kinopoisk',
+    revision: 14,
+    nodes: [{
+      handle: 'timeline',
+      resource_id: 'ProgressbarTimeline',
+      class_name: 'android.widget.SeekBar',
+      clickable: true,
+      editable: false,
+      enabled: true,
+      sensitive: false,
+      depth: 1,
+      bounds: { left: 100, top: 400, right: 900, bottom: 500 },
+    }],
+  };
+  const context = skill.createContext({
+    inputs: {
+      provider: 'kinopoisk',
+      steps: [{
+        type: 'SEEK_EXACT_SELECTOR_FRACTION',
+        selector: { kind: 'RESOURCE_ID', value: 'ProgressbarTimeline' },
+        fraction: 0.5,
+      }],
+    },
+  });
+  const directive = await skill.next({ state: 'TARGET_APP', snapshot: timelineSnapshot, context });
+  assert.equal(directive.type, 'TAP_POINT');
+  assert.equal(directive.playback_seek, true);
+  assert.deepEqual(await skill.validateDirective({ snapshot: timelineSnapshot, directive, context }), { ok: true });
+});
+
+test('media playback blocks persistent or commercial controls adjacent to player controls', async () => {
+  const skill = createMediaPlaybackPlanSkill();
+  for (const label of ['Like', 'Favorite', 'Добавить в Коллекцию', 'Download', 'Buy', 'Rent', 'Account']) {
+    const snapshot = {
+      package: 'ru.kinopoisk',
+      revision: 15,
+      nodes: [{
+        handle: 'blocked-' + label,
+        text: label,
+        clickable: true,
+        editable: false,
+        enabled: true,
+        sensitive: false,
+        depth: 1,
+        bounds: { left: 0, top: 0, right: 160, bottom: 80 },
+      }],
+    };
+    const context = skill.createContext({
+      inputs: {
+        provider: 'kinopoisk',
+        steps: [{ type: 'CLICK_EXACT_TEXT', text: label }],
+      },
+    });
+    const directive = await skill.next({ state: 'TARGET_APP', snapshot, context });
+    assert.equal(directive.type, 'STOP', label);
+    assert.equal(directive.error_code, 'SKILL_ACTION_NOT_ALLOWED', label);
+  }
+});

@@ -6,8 +6,9 @@ export const MEDIA_PLAYBACK_PACKAGES = Object.freeze([
   'ru.kinopoisk',
 ]);
 
-const PERSISTENT_OR_COMMERCIAL_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|account|billing|payment|мне нравится|лайк|избран|подпис|скачать|купить|аренд|удал|аккаунт|оплат)/iu;
-const PLAYBACK_ACTION_PATTERN = /(?:\bplay\b|\bpause\b|\bresume\b|continue watching|watch now|\blisten\b|\bnext\b|\bprevious\b|\breplay\b|воспроизвести|пауза|продолжить просмотр|продолжить слушать|смотреть|слушать|следующ|предыдущ|повторить)/iu;
+const PERSISTENT_OR_COMMERCIAL_PATTERN = /(?:like|favorite|favourite|subscribe|download|buy|rent|purchase|remove|delete|collection|account|billing|payment|мне нравится|лайк|избран|коллекц|подпис|скачать|купить|аренд|удал|аккаунт|оплат)/iu;
+const PLAYBACK_ACTION_PATTERN = /(?:\bplay\b|\bpause\b|\bresume\b|play[_\s-]?pause|continue watching|watch now|\blisten\b|\bnext\b|\bprevious\b|\breplay\b|\brewind\b|\bforward\b|воспроизвести|пауз\p{L}*|продолжить просмотр|продолжить слушать|смотреть|слушать|следующ|предыдущ|повторить|перемот)/iu;
+const SEEK_TARGET_PATTERN = /(?:\bseek\b|\bprogress\b|\btimeline\b|\bscrub\b|\bposition\b|перемот|прогресс|позици)/iu;
 
 function containsBounds(parent, child) {
   const p = parent?.bounds;
