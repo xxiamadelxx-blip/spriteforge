@@ -106,3 +106,36 @@ test('delivery cart planner itself rejects address text entry', async () => {
   assert.equal(directive.type, 'STOP');
   assert.equal(directive.error_code, 'SKILL_ACTION_NOT_ALLOWED');
 });
+
+
+test('delivery semantic center tap permits cart add but rejects checkout, payment, address and account targets', () => {
+  const add = authorize({
+    provider: 'samokat',
+    steps: [{
+      type: 'TAP_EXACT_SELECTOR_CENTER',
+      selector: { kind: 'RESOURCE_ID', value: 'CATALOG_PRODUCT_CARD_ADD_TO_CART_example' },
+    }],
+  });
+  assert.deepEqual(add, { ok: true });
+
+  for (const value of ['checkout_button', 'payment_button', 'delivery_address', 'account_button']) {
+    const result = authorize({
+      provider: 'samokat',
+      steps: [{
+        type: 'TAP_EXACT_SELECTOR_CENTER',
+        selector: { kind: 'RESOURCE_ID', value },
+      }],
+    });
+    assert.equal(result.ok, false, value);
+    assert.equal(result.code, 'SKILL_ACTION_NOT_ALLOWED', value);
+  }
+});
+
+test('delivery policy rejects arbitrary raw coordinate tap plans', () => {
+  const result = authorize({
+    provider: 'samokat',
+    steps: [{ type: 'TAP_POINT', x: 300, y: 460 }],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'SKILL_ACTION_NOT_ALLOWED');
+});

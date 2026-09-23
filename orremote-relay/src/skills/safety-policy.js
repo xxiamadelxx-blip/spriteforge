@@ -58,6 +58,7 @@ const DELIVERY_ADDRESS_OR_LOCATION_PATTERN = /(?:(?:delivery|shipping)[_\s-]*add
 const ALLOWED_BROWSER_STEP_TYPES = new Set([
   'CLICK_EXACT_TEXT',
   'CLICK_EXACT_SELECTOR',
+  'TAP_EXACT_SELECTOR_CENTER',
   'SET_TEXT_EXACT_SELECTOR',
   'SET_TEXT_EXACT_LABEL',
   'ASSERT_EXACT_TEXT',
@@ -127,7 +128,7 @@ function basicPlanValidation(steps, allowedTypes, forbiddenClickPattern) {
     }
 
     if (
-      type.startsWith('CLICK')
+      (type.startsWith('CLICK') || type === 'TAP_EXACT_SELECTOR_CENTER')
       && forbiddenClickPattern
       && forbiddenClickPattern.test(label)
     ) {

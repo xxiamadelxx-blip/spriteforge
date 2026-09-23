@@ -273,3 +273,49 @@ test('token-boundary cart regression retains real protected credential ceremonie
     assert.equal(directive.error_code, 'USER_AUTH_REQUIRED', resourceId);
   }
 });
+
+
+test('semantic center tap is selector-bounded, allows harmless cart add, and keeps auth targets user-only', async () => {
+  const skill = createDeliveryCartPlanSkill();
+  const addContext = skill.createContext({
+    inputs: {
+      provider: 'samokat',
+      steps: [{
+        type: 'TAP_EXACT_SELECTOR_CENTER',
+        selector: { kind: 'RESOURCE_ID', value: 'CATALOG_PRODUCT_CARD_ADD_TO_CART_example' },
+      }],
+    },
+  });
+  const addSnapshot = snap('ru.sbcs.store', [
+    node({
+      handle: 'add-water',
+      resource_id: 'CATALOG_PRODUCT_CARD_ADD_TO_CART_example',
+      bounds: { left: 100, top: 400, right: 500, bottom: 520 },
+    }),
+  ]);
+  const tap = await skill.next({ state: 'TARGET_APP', snapshot: addSnapshot, context: addContext });
+  assert.deepEqual(tap, {
+    type: 'TAP_POINT',
+    x: 300,
+    y: 460,
+    selector: { kind: 'RESOURCE_ID', value: 'CATALOG_PRODUCT_CARD_ADD_TO_CART_example' },
+    step_index: 0,
+  });
+  assert.deepEqual(await skill.validateDirective({ snapshot: addSnapshot, directive: tap, context: addContext }), { ok: true });
+
+  const authContext = skill.createContext({
+    inputs: {
+      provider: 'samokat',
+      steps: [{
+        type: 'TAP_EXACT_SELECTOR_CENTER',
+        selector: { kind: 'RESOURCE_ID', value: 'password' },
+      }],
+    },
+  });
+  const authSnapshot = snap('ru.sbcs.store', [
+    node({ handle: 'password', resource_id: 'password', bounds: { left: 100, top: 100, right: 900, bottom: 220 } }),
+  ]);
+  const blocked = await skill.next({ state: 'TARGET_APP', snapshot: authSnapshot, context: authContext });
+  assert.equal(blocked.type, 'STOP');
+  assert.equal(blocked.error_code, 'USER_AUTH_REQUIRED');
+});
