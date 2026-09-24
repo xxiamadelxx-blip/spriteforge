@@ -289,16 +289,23 @@ test('semantic center tap is selector-bounded, allows harmless cart add, and kee
   const addSnapshot = snap('ru.sbcs.store', [
     node({
       handle: 'add-water',
+      window_id: 41,
+      visible_to_user: true,
+      center_hit: 'OWNED',
       resource_id: 'CATALOG_PRODUCT_CARD_ADD_TO_CART_example',
       bounds: { left: 100, top: 400, right: 500, bottom: 520 },
     }),
   ]);
+  addSnapshot.hit_topology_signature = 'owned-samokat-add-topology';
   const tap = await skill.next({ state: 'TARGET_APP', snapshot: addSnapshot, context: addContext });
   assert.deepEqual(tap, {
     type: 'TAP_POINT',
     x: 300,
     y: 460,
     selector: { kind: 'RESOURCE_ID', value: 'CATALOG_PRODUCT_CARD_ADD_TO_CART_example' },
+    target_handle: 'add-water',
+    target_window_id: 41,
+    expected_hit_topology_signature: 'owned-samokat-add-topology',
     step_index: 0,
   });
   assert.deepEqual(await skill.validateDirective({ snapshot: addSnapshot, directive: tap, context: addContext }), { ok: true });

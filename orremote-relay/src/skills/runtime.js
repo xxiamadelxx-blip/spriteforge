@@ -83,15 +83,22 @@ function primitiveForDirective(directive, snapshot) {
           value: String(directive.value ?? ''),
         },
       };
-    case 'TAP_POINT':
-      return {
-        name: 'touch.tap',
-        args: {
-          expected_revision: revision,
-          x: Number(directive.x),
-          y: Number(directive.y),
-        },
+    case 'TAP_POINT': {
+      const args = {
+        expected_revision: revision,
+        x: Number(directive.x),
+        y: Number(directive.y),
       };
+      const hasGuard = directive.target_handle != null ||
+        directive.target_window_id != null ||
+        directive.expected_hit_topology_signature != null;
+      if (hasGuard) {
+        args.target_handle = String(directive.target_handle || '');
+        args.target_window_id = Number(directive.target_window_id);
+        args.expected_hit_topology_signature = String(directive.expected_hit_topology_signature || '');
+      }
+      return { name: 'touch.tap', args };
+    }
     case 'SWIPE': {
       const args = {
         expected_revision: revision,

@@ -137,6 +137,16 @@ function centerOfBounds(node) {
   };
 }
 
+function semanticCenterHit(snapshot, target) {
+  const hit = String(target?.center_hit ?? '').toUpperCase();
+  if (hit === 'OCCLUDED') return { ok: false, code: 'TARGET_OCCLUDED', message: 'Target center is owned by a higher Android window.' };
+  if (hit !== 'OWNED' || target?.visible_to_user !== true) return { ok: false, code: 'TARGET_HIT_UNVERIFIABLE', message: 'Target center hit ownership cannot be verified.' };
+  const signature = String(snapshot?.hit_topology_signature ?? '').trim();
+  const windowId = Number(target?.window_id);
+  if (!signature || !Number.isInteger(windowId) || !enabled(target)) return { ok: false, code: 'TARGET_HIT_UNVERIFIABLE', message: 'Guarded semantic tap metadata is incomplete.' };
+  return { ok: true, signature, windowId };
+}
+
 function viewport(snapshot) {
   const bounds = allNodes(snapshot)
     .map((node) => node?.bounds)
@@ -328,11 +338,16 @@ export function createNativeExactPlanSkill({
         }
         const center = centerOfBounds(target);
         if (!center) return stop('NATIVE_TARGET_HAS_NO_BOUNDS', 'Semantic tap target has no usable bounds.');
+        const hit = semanticCenterHit(snapshot, target);
+        if (!hit.ok) return stop(hit.code, hit.message);
         return {
           type: 'TAP_POINT',
           x: center.x,
           y: center.y,
           selector: { ...step.selector },
+          target_handle: target.handle,
+          target_window_id: hit.windowId,
+          expected_hit_topology_signature: hit.signature,
           step_index: stepIndex,
         };
       }
@@ -401,8 +416,13 @@ export function createNativeExactPlanSkill({
           return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Native tap target is outside the skill safety boundary.' };
         }
         const center = centerOfBounds(target);
-        if (!center || center.x !== Number(directive.x) || center.y !== Number(directive.y)) {
+        if (!center || center.x !== Number(directive.x) || center.y !== Number(directive.y) || target.handle !== directive.target_handle) {
           return { ok: false, code: 'NATIVE_TAP_TARGET_CHANGED', message: 'Semantic tap target moved before execution.' };
+        }
+        const hit = semanticCenterHit(snapshot, target);
+        if (!hit.ok) return { ok: false, code: hit.code, message: hit.message };
+        if (hit.windowId !== Number(directive.target_window_id) || hit.signature !== directive.expected_hit_topology_signature) {
+          return { ok: false, code: 'STALE_STATE', message: 'Semantic tap window topology changed before execution.' };
         }
         return { ok: true };
       }
