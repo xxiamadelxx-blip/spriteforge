@@ -175,6 +175,11 @@ function stop(error_code, message) {
   return { type: 'STOP', error_code, message };
 }
 
+function withDeclaredPostcondition(directive, step) {
+  if (!Object.prototype.hasOwnProperty.call(step || {}, 'postcondition')) return directive;
+  return { ...directive, postcondition: step.postcondition };
+}
+
 function sensitive(snapshot, node) {
   if (node?.sensitive === true || AUTH_PATTERN.test(authDescriptor(node))) return true;
   return descendants(snapshot, node).some((candidate) => (
@@ -267,7 +272,7 @@ export function createNativeExactPlanSkill({
       }
 
       if (step.type === 'SCROLL_DOWN') {
-        return scrollDirective(snapshot, stepIndex);
+        return withDeclaredPostcondition(scrollDirective(snapshot, stepIndex), step);
       }
 
       if (step.type === 'WAIT_FOR_EXACT_SELECTOR') {
@@ -325,7 +330,10 @@ export function createNativeExactPlanSkill({
         if (isDangerous(snapshot, target) || isDangerous(snapshot, clickable)) {
           return stop('SKILL_ACTION_NOT_ALLOWED', 'Matched native action is outside the skill safety boundary.');
         }
-        return { type: 'CLICK_HANDLE', handle: clickable.handle, step_index: stepIndex };
+        return withDeclaredPostcondition(
+          { type: 'CLICK_HANDLE', handle: clickable.handle, step_index: stepIndex },
+          step,
+        );
       }
 
       if (step.type === 'TAP_EXACT_SELECTOR_CENTER') {
@@ -340,7 +348,7 @@ export function createNativeExactPlanSkill({
         if (!center) return stop('NATIVE_TARGET_HAS_NO_BOUNDS', 'Semantic tap target has no usable bounds.');
         const hit = semanticCenterHit(snapshot, target);
         if (!hit.ok) return stop(hit.code, hit.message);
-        return {
+        return withDeclaredPostcondition({
           type: 'TAP_POINT',
           x: center.x,
           y: center.y,
@@ -349,7 +357,7 @@ export function createNativeExactPlanSkill({
           target_window_id: hit.windowId,
           expected_hit_topology_signature: hit.signature,
           step_index: stepIndex,
-        };
+        }, step);
       }
 
       if (step.type === 'SET_TEXT_EXACT_SELECTOR') {
@@ -360,13 +368,13 @@ export function createNativeExactPlanSkill({
         if (step.sensitive === true || sensitive(snapshot, target)) {
           return stop('USER_AUTH_REQUIRED', 'Sensitive native text entry is user-only.');
         }
-        return {
+        return withDeclaredPostcondition({
           type: 'SET_TEXT_HANDLE',
           handle: target.handle,
           value: String(step.value ?? ''),
           sensitive: false,
           step_index: stepIndex,
-        };
+        }, step);
       }
 
       return stop('SKILL_ACTION_NOT_ALLOWED', `Unsupported native plan step: ${String(step.type || '')}`);
@@ -430,8 +438,17 @@ export function createNativeExactPlanSkill({
       return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Native skill emitted an unsupported directive.' };
     },
 
-    async acceptResult({ directive, context }) {
+    async acceptResult({ directive, semanticResult, context }) {
       if (directive.type === 'LAUNCH') return true;
+      if (Object.prototype.hasOwnProperty.call(directive || {}, 'postcondition')) {
+        const semanticallyAccepted = semanticResult?.result === 'VERIFIED'
+          || (
+            semanticResult?.result === 'POSTCONDITION_ALREADY_SATISFIED'
+            && directive.postcondition?.mode === 'state'
+            && directive.postcondition?.preexisting_ok === true
+          );
+        if (!semanticallyAccepted) return true;
+      }
       if (Number.isInteger(directive.step_index) && directive.step_index === context.index) {
         context.index += 1;
       }

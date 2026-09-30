@@ -195,6 +195,14 @@ function primitiveBody(result) {
     : result;
 }
 
+function semanticPostconditionSelector(selector) {
+  const kind = String(selector?.kind || '').toUpperCase();
+  if (!['TEXT', 'CONTENT_DESCRIPTION', 'RESOURCE_ID', 'CLASS_NAME'].includes(kind)) return null;
+  const value = String(selector?.value ?? '');
+  return value ? { kind, value } : null;
+}
+
+
 export function createBrowserAdminRunPlanSkill() {
   return Object.freeze({
     id: 'browser.admin.run_plan',
@@ -357,6 +365,12 @@ export function createBrowserAdminRunPlanSkill() {
       }
 
       if (step.type === 'NAVIGATE_URL') {
+        if (snapshot?.display_id !== 0) {
+          return stop(
+            'ACTION_NOT_VERIFIED',
+            'Browser navigation is not display-scoped; secondary-display navigation fails closed before dispatch.',
+          );
+        }
         if (context.navigation_phase === 'submit') {
           const go = goButton(snapshot);
           if (!go) {
@@ -365,7 +379,33 @@ export function createBrowserAdminRunPlanSkill() {
           if (targetIsSensitiveControl(snapshot, go) || targetIsDangerous(snapshot, go)) {
             return stop('SKILL_ACTION_NOT_ALLOWED', 'Browser navigation submit control failed safety validation.');
           }
-          return { type: 'CLICK_HANDLE', handle: go.handle, step_index: stepIndex, navigation_submit: true };
+          const markerDeclared = Object.prototype.hasOwnProperty.call(step || {}, 'destination_marker');
+          const markerSelector = semanticPostconditionSelector(step.destination_marker);
+          const directive = { type: 'CLICK_HANDLE', handle: go.handle, step_index: stepIndex, navigation_submit: true };
+          if (!markerDeclared) return directive;
+          if (!markerSelector) {
+            return stop(
+              'ACTION_NOT_VERIFIED',
+              'Contracted browser navigation requires a cross-revision exact destination marker.',
+            );
+          }
+          if (go?.window_type !== 'APPLICATION' || String(go?.window_package || '') !== OPERA_PACKAGE) {
+            return stop(
+              'ACTION_NOT_VERIFIED',
+              'Contracted browser navigation submit is not bound to the Opera application window.',
+            );
+          }
+          return {
+            ...directive,
+            postcondition: {
+              mode: 'transition',
+              expr: {
+                kind: 'node_present',
+                selector: markerSelector,
+                scope: { window_type: 'APPLICATION', package: OPERA_PACKAGE },
+              },
+            },
+          };
         }
 
         const bar = addressBar(snapshot);
@@ -441,7 +481,7 @@ export function createBrowserAdminRunPlanSkill() {
       return { ok: false, code: 'SKILL_ACTION_NOT_ALLOWED', message: 'Browser skill emitted an unsupported directive.' };
     },
 
-    async acceptResult({ directive, primitiveResult, context }) {
+    async acceptResult({ directive, primitiveResult, semanticResult, context }) {
       if (directive.type === 'LAUNCH') return true;
       if (directive.navigation_focus === true) {
         context.navigation_phase = 'enter';
@@ -456,6 +496,12 @@ export function createBrowserAdminRunPlanSkill() {
         return true;
       }
       if (directive.navigation_submit === true) {
+        if (
+          Object.prototype.hasOwnProperty.call(directive || {}, 'postcondition')
+          && semanticResult?.result !== 'VERIFIED'
+        ) {
+          return true;
+        }
         context.navigation_phase = null;
         context.index += 1;
         return true;

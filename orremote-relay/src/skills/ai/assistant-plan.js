@@ -83,8 +83,6 @@ export function createAiAssistantPlanSkill() {
         ai_provider: provider,
         ai_runtime_packages: runtimePackages(provider, resolvedPackage),
         ai_pending_launch_proof: false,
-        ai_pending_text_proof: null,
-        ai_pending_send_proof: null,
         ai_last_prompt: null,
         ai_composer_selector: null,
       };
@@ -107,42 +105,146 @@ export function createAiAssistantPlanSkill() {
         context.ai_pending_launch_proof = false;
       }
 
-      if (context?.ai_pending_text_proof) {
-        const pending = context.ai_pending_text_proof;
-        const field = findExactNode(snapshot, pending.selector);
-        if (!field || field?.editable !== true || field?.sensitive === true || nodeText(field) !== pending.value) {
+      const step = context?.steps?.[context?.index] || null;
+      const directive = await base.next(args);
+
+      if (
+        directive?.type === 'SET_TEXT_HANDLE'
+        && step?.type === 'SET_TEXT_EXACT_SELECTOR'
+        && step?.selector
+      ) {
+        const selectorKind = String(step.selector.kind || '').toUpperCase();
+        if (!['TEXT', 'CONTENT_DESCRIPTION', 'RESOURCE_ID', 'CLASS_NAME'].includes(selectorKind)) {
           return stop(
-            'AI_TEXT_NOT_VERIFIED',
-            'AI composer text was not semantically proven after the delayed set-text result.',
+            'ACTION_NOT_VERIFIED',
+            'AI composer set-text requires a cross-revision exact semantic selector.',
           );
         }
-        context.ai_last_prompt = pending.value;
-        context.ai_composer_selector = pending.selector;
-        context.ai_pending_text_proof = null;
-        context.index += 1;
-        return { type: 'OBSERVE' };
-      }
-
-      if (context?.ai_pending_send_proof) {
-        const pending = context.ai_pending_send_proof;
-        const composer = findExactNode(snapshot, pending.composer_selector);
-        const promptVisible = exactTextVisible(snapshot, pending.prompt);
-        const composerCleared = composer && composer?.editable === true && nodeText(composer) === '';
-        if (!promptVisible || !composerCleared) {
+        const target = findExactNode(snapshot, { kind: 'HANDLE', value: directive.handle });
+        const targetPackage = String(target?.window_package || '');
+        if (
+          !target
+          || target?.window_type !== 'APPLICATION'
+          || !targetPackage
+          || !context?.ai_runtime_packages?.has(targetPackage)
+        ) {
           return stop(
-            'AI_SEND_NOT_VERIFIED',
-            'AI send action was not semantically proven after the delayed click result.',
+            'ACTION_NOT_VERIFIED',
+            'AI composer target is not bound to an allowed application window.',
           );
         }
-        context.ai_pending_send_proof = null;
-        context.index += 1;
-        return { type: 'OBSERVE' };
+        return {
+          ...directive,
+          postcondition: {
+            mode: 'transition',
+            expr: {
+              kind: 'node_field',
+              selector: { kind: selectorKind, value: String(step.selector.value ?? '') },
+              scope: {
+                window_type: 'APPLICATION',
+                package: targetPackage,
+              },
+              field: 'text',
+              op: 'eq',
+              value: String(directive.value ?? ''),
+            },
+          },
+        };
       }
 
-      return base.next(args);
+      if (
+        directive?.type === 'CLICK_HANDLE'
+        && step?.type === 'CLICK_EXACT_TEXT'
+        && SEND_PATTERN.test(String(step.text || '').trim())
+      ) {
+        const prompt = String(context?.ai_last_prompt ?? '');
+        const composerSelector = context?.ai_composer_selector;
+        const composer = composerSelector ? findExactNode(snapshot, composerSelector) : null;
+        const sendTarget = findExactNode(snapshot, { kind: 'HANDLE', value: directive.handle });
+        const packageName = String(composer?.window_package || '');
+        if (
+          !prompt
+          || !composerSelector
+          || !composer
+          || composer?.editable !== true
+          || composer?.sensitive === true
+          || composer?.window_type !== 'APPLICATION'
+          || !packageName
+          || !context?.ai_runtime_packages?.has(packageName)
+          || nodeText(composer) !== prompt
+          || !sendTarget
+          || sendTarget?.window_type !== 'APPLICATION'
+          || String(sendTarget?.window_package || '') !== packageName
+        ) {
+          return stop(
+            'ACTION_NOT_VERIFIED',
+            'AI Send requires composer and action targets bound to the same allowed application window.',
+          );
+        }
+        const priorSentMatches = nodes(snapshot).filter((node) => (
+          node !== composer
+          && node?.window_type === 'APPLICATION'
+          && node?.window_package === packageName
+          && node?.visible_to_user === true
+          && node?.sensitive !== true
+          && node?.editable !== true
+          && (
+            String(node?.text ?? '') === prompt
+            || String(node?.content_description ?? '') === prompt
+          )
+        ));
+        if (priorSentMatches.length > 0) {
+          return stop(
+            'POSTCONDITION_ALREADY_SATISFIED',
+            'The exact AI prompt is already present as a sent message; Send will not be replayed.',
+          );
+        }
+        if (snapshot?.semantic_tree_complete !== true || snapshot?.truncated === true) {
+          return stop(
+            'ACTION_NOT_VERIFIED',
+            'AI Send requires complete scoped semantic coverage to prove the prompt was not already sent.',
+          );
+        }
+        const selectorKind = String(composerSelector.kind || '').toUpperCase();
+        if (!['TEXT', 'CONTENT_DESCRIPTION', 'RESOURCE_ID', 'CLASS_NAME'].includes(selectorKind)) {
+          return stop(
+            'ACTION_NOT_VERIFIED',
+            'AI Send requires a cross-revision composer selector.',
+          );
+        }
+        return {
+          ...directive,
+          postcondition: {
+            mode: 'transition',
+            expr: {
+              kind: 'all',
+              children: [
+                {
+                  kind: 'node_field_transition',
+                  selector: { kind: selectorKind, value: String(composerSelector.value ?? '') },
+                  scope: { window_type: 'APPLICATION', package: packageName },
+                  field: 'text',
+                  from: prompt,
+                  to: '',
+                },
+                {
+                  kind: 'node_field',
+                  selector: { kind: 'TEXT', value: prompt },
+                  scope: { window_type: 'APPLICATION', package: packageName },
+                  field: 'editable',
+                  op: 'eq',
+                  value: false,
+                },
+              ],
+            },
+          },
+        };
+      }
+
+      return directive;
     },
     async acceptResult(args) {
-      const { directive, primitiveResult, context } = args;
+      const { directive, primitiveResult, semanticResult, context } = args;
       const body = primitiveBody(primitiveResult);
       const step = context?.steps?.[context?.index];
 
@@ -151,35 +253,28 @@ export function createAiAssistantPlanSkill() {
         return { handled_error: true };
       }
 
-      if (directive?.type === 'SET_TEXT_HANDLE') {
-        const selector = step?.type === 'SET_TEXT_EXACT_SELECTOR' ? step.selector : null;
-        const value = String(directive.value ?? '');
-        if (body?.error_code === 'ACTION_NOT_VERIFIED' && selector) {
-          context.ai_pending_text_proof = { selector, value };
-          return { handled_error: true };
-        }
-        if (!body?.error_code && selector) {
-          context.ai_last_prompt = value;
-          context.ai_composer_selector = selector;
-        }
+      if (
+        directive?.type === 'SET_TEXT_HANDLE'
+        && Object.prototype.hasOwnProperty.call(directive || {}, 'postcondition')
+        && semanticResult?.result === 'VERIFIED'
+        && step?.type === 'SET_TEXT_EXACT_SELECTOR'
+      ) {
+        context.ai_last_prompt = String(directive.value ?? '');
+        context.ai_composer_selector = step.selector;
       }
 
       if (
         directive?.type === 'CLICK_HANDLE'
+        && Object.prototype.hasOwnProperty.call(directive || {}, 'postcondition')
+        && semanticResult?.result === 'VERIFIED'
         && step?.type === 'CLICK_EXACT_TEXT'
         && SEND_PATTERN.test(String(step.text || '').trim())
-        && body?.error_code === 'ACTION_NOT_VERIFIED'
-        && context?.ai_last_prompt
-        && context?.ai_composer_selector
       ) {
-        context.ai_pending_send_proof = {
-          prompt: context.ai_last_prompt,
-          composer_selector: context.ai_composer_selector,
-        };
-        return { handled_error: true };
+        context.ai_last_prompt = null;
+        context.ai_composer_selector = null;
       }
 
       return base.acceptResult(args);
-    },
+    }
   });
 }
