@@ -25,9 +25,9 @@ export function createDeliveryCartPlanSkill() {
     },
     async next(args) {
       const step = args?.context?.steps?.[args?.context?.index];
-      if (String(step?.type || '').startsWith('SET_TEXT')) {
+      if (String(step?.type || '').startsWith('SET_TEXT') || step?.type === 'SUBMIT_EDITOR_EXACT_SELECTOR') {
         const label = String(step?.label ?? step?.selector?.value ?? '');
-        if (ADDRESS_OR_LOCATION_PATTERN.test(label)) {
+        if (ADDRESS_OR_LOCATION_PATTERN.test(label) || (step?.type === 'SUBMIT_EDITOR_EXACT_SELECTOR' && CHECKOUT_OR_ORDER_PATTERN.test(label))) {
           return {
             type: 'STOP',
             error_code: 'SKILL_ACTION_NOT_ALLOWED',

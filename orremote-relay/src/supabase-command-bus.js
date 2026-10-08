@@ -4,6 +4,7 @@ const ANDROID_TOOLS = new Set([
   'screen.observe',
   'ui.click',
   'ui.set_text',
+  'ui.editor_action',
   'touch.tap',
   'touch.swipe',
   'system.back',
@@ -16,6 +17,7 @@ const ANDROID_TOOLS = new Set([
 const ALLOWED_TOOLS = new Set([...ANDROID_TOOLS, 'skill.run']);
 const CODEMAGIC_BUILD_URL = 'https://api.codemagic.io/builds';
 const CODEMAGIC_ALLOWED_BRANCH = 'ci/android-build';
+const RELEASE_TAG_PREFIX = 'refs/tags/orremote/android/';
 
 function asObject(text) {
   try {
@@ -23,6 +25,26 @@ function asObject(text) {
   } catch {
     return { raw_body: String(text || '') };
   }
+}
+
+function releaseTagName(tagRef) {
+  const value = String(tagRef || '');
+  if (!value.startsWith(RELEASE_TAG_PREFIX) || value.length <= RELEASE_TAG_PREFIX.length) {
+    const error = new Error('RELEASE_TAG_INVALID');
+    error.code = 'RELEASE_TAG_INVALID';
+    throw error;
+  }
+  return value.slice('refs/tags/'.length);
+}
+
+function releaseSourceSha(value) {
+  const sha = String(value || '').toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(sha)) {
+    const error = new Error('RELEASE_SOURCE_SHA_INVALID');
+    error.code = 'RELEASE_SOURCE_SHA_INVALID';
+    throw error;
+  }
+  return sha;
 }
 
 function skillEnvelope(commandId, run) {
@@ -54,6 +76,11 @@ export function createSupabaseCommandBus({
     config.supabaseUrl
     && config.supabasePublishableKey
     && config.orremoteBusSecret,
+  );
+  const releaseBuildEnabled = Boolean(
+    enabled
+    && config.codemagicApiToken
+    && config.releaseGithubToken,
   );
   let timer = null;
   let stopped = false;
@@ -129,6 +156,66 @@ export function createSupabaseCommandBus({
         message: String(error?.message || error || 'CODEMAGIC_BUILD_FAILED'),
       },
     });
+  }
+
+  async function failReleaseBuildRequest(requestId, error) {
+    return rpc('orremote_fail_release_build_request', {
+      p_bus_secret: config.orremoteBusSecret,
+      p_request_id: requestId,
+      p_error: {
+        code: String(error?.code || 'RELEASE_BUILD_FAILED'),
+        message: String(error?.message || error || 'RELEASE_BUILD_FAILED'),
+      },
+    });
+  }
+
+  async function githubRequest(path, options = {}) {
+    const response = await fetchImpl(`https://api.github.com${path}`, {
+      ...options,
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${config.releaseGithubToken}`,
+        'content-type': 'application/json',
+        ...(options.headers || {}),
+      },
+    });
+    const text = await response.text();
+    const body = text ? asObject(text) : {};
+    return { response, body };
+  }
+
+  async function ensureReleaseTag(request) {
+    const sourceRepo = String(request.source_repo || '');
+    const sourceSha = releaseSourceSha(request.source_sha);
+    const tagName = releaseTagName(request.tag_ref);
+    if (sourceRepo !== config.releaseSourceRepo) {
+      const error = new Error('RELEASE_SOURCE_REPO_NOT_ALLOWED');
+      error.code = 'RELEASE_SOURCE_REPO_NOT_ALLOWED';
+      throw error;
+    }
+    const [owner, repository, extra] = sourceRepo.split('/');
+    if (!owner || !repository || extra) {
+      const error = new Error('RELEASE_SOURCE_REPO_INVALID');
+      error.code = 'RELEASE_SOURCE_REPO_INVALID';
+      throw error;
+    }
+    const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`;
+    const create = await githubRequest(`${repoPath}/git/refs`, {
+      method: 'POST',
+      body: JSON.stringify({ ref: request.tag_ref, sha: sourceSha }),
+    });
+    if (!create.response.ok && create.response.status !== 422) {
+      const error = new Error(`GITHUB_TAG_CREATE_HTTP_${create.response.status}`);
+      error.code = `GITHUB_TAG_CREATE_HTTP_${create.response.status}`;
+      throw error;
+    }
+    const ref = await githubRequest(`${repoPath}/git/ref/${encodeURIComponent(`tags/${tagName}`)}`);
+    if (!ref.response.ok || ref.body?.object?.type !== 'commit' || String(ref.body?.object?.sha || '').toLowerCase() !== sourceSha) {
+      const error = new Error('RELEASE_TAG_TARGET_MISMATCH');
+      error.code = 'RELEASE_TAG_TARGET_MISMATCH';
+      throw error;
+    }
+    return { sourceSha, tagName };
   }
 
   async function completeCommand(commandId, httpStatus, body) {
@@ -310,6 +397,81 @@ export function createSupabaseCommandBus({
     }
   }
 
+  async function processReleaseBuildOnce() {
+    if (!releaseBuildEnabled) return 'disabled';
+    const rows = await rpc('orremote_claim_release_build_request', {
+      p_bus_secret: config.orremoteBusSecret,
+    });
+    if (!Array.isArray(rows) || rows.length === 0) return 'idle';
+    const request = rows[0];
+    try {
+      const requestId = String(request.request_id || '');
+      if (!requestId) {
+        const error = new Error('RELEASE_REQUEST_ID_MISSING');
+        error.code = 'RELEASE_REQUEST_ID_MISSING';
+        throw error;
+      }
+      if (String(request.workflow_id || '') !== config.codemagicWorkflowId) {
+        const error = new Error('CODEMAGIC_WORKFLOW_NOT_ALLOWED');
+        error.code = 'CODEMAGIC_WORKFLOW_NOT_ALLOWED';
+        throw error;
+      }
+      const { sourceSha, tagName } = await ensureReleaseTag(request);
+      let response;
+      try {
+        response = await fetchImpl(CODEMAGIC_BUILD_URL, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-auth-token': config.codemagicApiToken,
+          },
+          body: JSON.stringify({
+            appId: config.codemagicAppId,
+            workflowId: config.codemagicWorkflowId,
+            tag: tagName,
+            environment: {
+              variables: {
+                ORREMOTE_EXPECTED_COMMIT: sourceSha,
+                ORREMOTE_RELEASE_REQUEST_ID: requestId,
+                ORREMOTE_RELEASE_TAG: tagName,
+              },
+            },
+            labels: ['orremote-release', `request:${requestId}`, `commit:${sourceSha}`, `tag:${tagName}`],
+          }),
+        });
+      } catch (cause) {
+        const error = new Error('CODEMAGIC_BUILD_POST_AMBIGUOUS');
+        error.code = 'CODEMAGIC_BUILD_POST_AMBIGUOUS';
+        error.cause = cause;
+        throw error;
+      }
+      const text = await response.text();
+      const parsed = text ? asObject(text) : {};
+      if (!response.ok) {
+        const error = new Error(`CODEMAGIC_BUILD_HTTP_${response.status}`);
+        error.code = `CODEMAGIC_BUILD_HTTP_${response.status}`;
+        throw error;
+      }
+      const buildId = String(parsed?.buildId || '');
+      if (!buildId) {
+        const error = new Error('CODEMAGIC_BUILD_ID_MISSING');
+        error.code = 'CODEMAGIC_BUILD_ID_MISSING';
+        throw error;
+      }
+      await rpc('orremote_start_release_build_request', {
+        p_bus_secret: config.orremoteBusSecret,
+        p_request_id: requestId,
+        p_build_id: buildId,
+        p_source_sha: sourceSha,
+        p_tag_ref: request.tag_ref,
+      });
+      return 'started';
+    } catch (error) {
+      await failReleaseBuildRequest(request.request_id, error);
+      return 'failed';
+    }
+  }
+
   function schedule(delay) {
     if (!enabled || stopped) return;
     timer = setTimeout(async () => {
@@ -318,6 +480,7 @@ export function createSupabaseCommandBus({
       let commandOutcome = 'idle';
       let artifactOutcome = 'idle';
       let ciOutcome = 'disabled';
+      let releaseBuildOutcome = 'disabled';
       try {
         commandOutcome = await processOnce();
       } catch (error) {
@@ -332,11 +495,17 @@ export function createSupabaseCommandBus({
         ciOutcome = await processCiOnce();
       } catch (error) {
         console.error('Supabase CI bus poll failed', error?.message || error);
+      }
+      try {
+        releaseBuildOutcome = await processReleaseBuildOnce();
+      } catch (error) {
+        console.error('Supabase release build poll failed', error?.message || error);
       } finally {
         running = false;
       }
       const ciIdle = ciOutcome === 'idle' || ciOutcome === 'disabled';
-      const allIdle = commandOutcome === 'idle' && artifactOutcome === 'idle' && ciIdle;
+      const releaseIdle = releaseBuildOutcome === 'idle' || releaseBuildOutcome === 'disabled';
+      const allIdle = commandOutcome === 'idle' && artifactOutcome === 'idle' && ciIdle && releaseIdle;
       schedule(allIdle ? (config.orremoteBusPollMs || 1000) : 0);
     }, Math.max(0, delay));
     timer.unref?.();
@@ -358,6 +527,7 @@ export function createSupabaseCommandBus({
     processOnce,
     processArtifactOnce,
     processCiOnce,
+    processReleaseBuildOnce,
     registerPair,
     start,
     stop,
