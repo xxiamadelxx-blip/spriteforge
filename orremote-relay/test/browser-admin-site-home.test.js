@@ -44,6 +44,7 @@ function browserSnapshot({ focused = false, startPagePlaceholder = false } = {})
   return {
     package: 'com.opera.browser',
     revision: focused ? 8 : 7,
+    display_id: 0,
     nodes,
   };
 }
