@@ -1,4 +1,3 @@
-// Render verification trigger for browser admin wait/capture.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createBrowserAdminRunPlanSkill } from '../src/skills/browser/admin-run-plan.js';

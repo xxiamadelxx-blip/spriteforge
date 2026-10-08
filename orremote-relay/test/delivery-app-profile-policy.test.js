@@ -12,6 +12,21 @@ function authorize(inputs) {
 
 test('delivery provider profile authorizes its installed package without raw package input', () => {
   assert.deepEqual(authorize({ provider: 'samokat', steps: [] }), { ok: true });
+  assert.deepEqual(authorize({
+    provider: 'vkusvill',
+    steps: [{
+      type: 'SUBMIT_EDITOR_EXACT_SELECTOR',
+      selector: { kind: 'RESOURCE_ID', value: 'ru.vkusvill:id/et_search' },
+      postcondition: {
+        mode: 'transition',
+        expr: {
+          kind: 'node_present',
+          selector: { kind: 'TEXT', value: 'Чай' },
+          scope: { window_type: 'APPLICATION', package: 'ru.vkusvill' },
+        },
+      },
+    }],
+  }), { ok: true });
 });
 
 test('delivery provider profile rejects a conflicting package', () => {
@@ -40,6 +55,16 @@ test('delivery cart policy allows cart edits but blocks address or location comm
       selector: { kind: 'RESOURCE_ID', value: 'delivery_address' },
       value: 'some address',
       sensitive: false,
+    },
+    {
+      type: 'SUBMIT_EDITOR_EXACT_SELECTOR',
+      selector: { kind: 'RESOURCE_ID', value: 'delivery_address' },
+      postcondition: { mode: 'invalid-test-fixture' },
+    },
+    {
+      type: 'SUBMIT_EDITOR_EXACT_SELECTOR',
+      selector: { kind: 'RESOURCE_ID', value: 'payment_method' },
+      postcondition: { mode: 'invalid-test-fixture' },
     },
     { type: 'CLICK_EXACT_TEXT', text: 'Текущее местоположение' },
   ]) {
@@ -86,6 +111,16 @@ test('delivery cart policy does not enter account or sign-in controls', () => {
     assert.equal(result.ok, false, text);
     assert.equal(result.code, 'SKILL_ACTION_NOT_ALLOWED');
   }
+  const sensitiveEditor = authorize({
+    provider: 'vkusvill',
+    steps: [{
+      type: 'SUBMIT_EDITOR_EXACT_SELECTOR',
+      selector: { kind: 'RESOURCE_ID', value: 'password_input' },
+      postcondition: { mode: 'invalid-test-fixture' },
+    }],
+  });
+  assert.equal(sensitiveEditor.ok, false);
+  assert.equal(sensitiveEditor.code, 'USER_AUTH_REQUIRED');
 });
 
 
@@ -103,6 +138,22 @@ test('delivery cart planner itself rejects address text entry', async () => {
   });
   const snapshot = { package: 'ru.sbcs.store', revision: 2, nodes: [] };
   const directive = await skill.next({ state: 'TARGET_APP', snapshot, context });
+  assert.equal(directive.type, 'STOP');
+  assert.equal(directive.error_code, 'SKILL_ACTION_NOT_ALLOWED');
+});
+
+test('delivery cart planner rejects editor submit for an address field before generic dispatch', async () => {
+  const context = skill.createContext({
+    inputs: {
+      provider: 'samokat',
+      steps: [{
+        type: 'SUBMIT_EDITOR_EXACT_SELECTOR',
+        selector: { kind: 'RESOURCE_ID', value: 'delivery_address' },
+        postcondition: { mode: 'invalid-test-fixture' },
+      }],
+    },
+  });
+  const directive = await skill.next({ state: 'TARGET_APP', snapshot: { package: 'ru.sbcs.store', revision: 2, nodes: [] }, context });
   assert.equal(directive.type, 'STOP');
   assert.equal(directive.error_code, 'SKILL_ACTION_NOT_ALLOWED');
 });

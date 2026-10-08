@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { getRelaySkillsRuntime } from './skills/index.js';
+import { describeApprovedSkills, parseAppInventory } from './agent-skill-contracts.js';
 import { TOOLS } from './tool-catalog.js';
 
 function bearerToken(req) {
@@ -79,6 +80,15 @@ function resultFromSkill(run) {
   };
 }
 
+const AGENT_PROTOCOL = 'orremote-agent/1';
+function localToolResult(payload, summary) {
+  return {
+    content: [{ type: 'text', text: summary }],
+    structuredContent: payload,
+    isError: false,
+  };
+}
+
 function buildServer({ config, oauth, deviceRelay, skillsRuntime }, requestContext) {
   const token = requestContext?.authInfo?.token || '';
   const claims = oauth.verifyAccessToken(token);
@@ -109,7 +119,83 @@ function buildServer({ config, oauth, deviceRelay, skillsRuntime }, requestConte
           return toolError(`insufficient_scope: ${tool.name} requires ${tool.scope}`);
         }
 
-        if (tool.name === 'skill.run') {
+        if (tool.name === 'orremote.status') {
+          // Presence is scoped to the OAuth token's device; no raw id, pair generation,
+          // session epoch or credential is reflected in the agent-facing response.
+          const presence = typeof deviceRelay.presence === 'function'
+            ? deviceRelay.presence(claims.device_id)
+            : null;
+          const online = presence?.connected === true;
+          return localToolResult({
+            protocol: AGENT_PROTOCOL,
+            device: { online, alias: 'primary' },
+            session: { authenticated: true, transport: online ? 'connected' : 'offline' },
+            capabilities: {
+              observe: true,
+              list_skills: true,
+              app_list: true,
+              run_skill: claims.scopes.includes('android.control'),
+            },
+          }, online ? 'Ø Remote device is connected.' : 'Ø Remote device is offline.');
+        }
+
+        if (tool.name === 'orremote.list_skills') {
+          const online = typeof deviceRelay.presence === 'function'
+            && deviceRelay.presence(claims.device_id)?.connected === true;
+          let inventory = null;
+          if (online) {
+            // Read-only Android app inventory. Its labels and non-approved package
+            // identifiers are never included in the response.
+            const requestId = crypto.randomUUID();
+            try {
+              const remote = await deviceRelay.forwardMcp({
+                deviceId: claims.device_id,
+                pairId: claims.pair_id,
+                headers: {
+                  'mcp-protocol-version': '2026-07-28',
+                  'mcp-method': 'tools/call',
+                  'mcp-name': 'app.list',
+                  'content-type': 'application/json',
+                },
+                body: JSON.stringify({
+                  jsonrpc: '2.0', id: requestId, method: 'tools/call',
+                  params: { name: 'app.list', arguments: {} },
+                }),
+              });
+              inventory = parseAppInventory(remote);
+            } catch {
+              // An offline/timeout/accessibility failure is not proof that an
+              // app is absent. Never retry the command blindly.
+            }
+          }
+          return localToolResult({
+            protocol: AGENT_PROTOCOL,
+            availability_source: !online ? 'device_offline'
+              : inventory?.source || 'unverified',
+            skills: describeApprovedSkills(inventory),
+          }, 'Approved Ø Remote skills and checked availability are listed in structuredContent.');
+        }
+
+        if (tool.name === 'orremote.disconnect') {
+          if (arguments_?.confirm !== true) {
+            return toolError('EXPLICIT_USER_CONFIRMATION_REQUIRED');
+          }
+          try {
+            const success = await oauth.revokeToken({
+              token,
+              clientId: String(claims.client_id || ''),
+            });
+            if (!success) return toolError('OAUTH_REVOCATION_FAILED');
+            return localToolResult({
+              status: 'DISCONNECTED',
+              pairing_unchanged: true,
+            }, 'This agent connection was revoked; the Android phone pairing is unchanged.');
+          } catch {
+            return toolError('OAUTH_REVOCATION_STORE_UNAVAILABLE');
+          }
+        }
+
+        if (tool.name === 'skill.run' || tool.name === 'orremote.run_skill') {
           if (!skillsRuntime || typeof skillsRuntime.run !== 'function') {
             return toolError('SKILL_RUNTIME_UNAVAILABLE: relay skills runtime is not configured.');
           }
@@ -126,12 +212,15 @@ function buildServer({ config, oauth, deviceRelay, skillsRuntime }, requestConte
           }
         }
 
+        const primitiveName = tool.name === 'orremote.observe'
+          ? 'screen.observe'
+          : tool.name === 'orremote.app_list' ? 'app.list' : tool.name;
         const requestId = crypto.randomUUID();
         const body = JSON.stringify({
           jsonrpc: '2.0',
           id: requestId,
           method: 'tools/call',
-          params: { name: tool.name, arguments: arguments_ ?? {} },
+          params: { name: primitiveName, arguments: arguments_ ?? {} },
         });
 
         try {
@@ -141,7 +230,7 @@ function buildServer({ config, oauth, deviceRelay, skillsRuntime }, requestConte
             headers: {
               'mcp-protocol-version': '2026-07-28',
               'mcp-method': 'tools/call',
-              'mcp-name': tool.name,
+              'mcp-name': primitiveName,
               'content-type': 'application/json',
             },
             body,

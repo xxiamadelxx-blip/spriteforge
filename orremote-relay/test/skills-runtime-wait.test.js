@@ -18,9 +18,10 @@ test('skills runtime handles bounded WAIT locally without touching Android', asy
       return { type: 'COMPLETE', output: { done: true } };
     },
   };
+  const registry = createSkillRegistry([skill]);
   const primitives = [];
   const runtime = createSkillRuntime({
-    registry: createSkillRegistry([skill]),
+    registry,
     invokePrimitive: async (name) => {
       primitives.push(name);
       if (name !== 'screen.observe') throw new Error(`unexpected primitive ${name}`);

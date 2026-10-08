@@ -13,10 +13,12 @@ test('isolated relay tests cannot enable production mutation backends', () => {
     CM_API_TOKEN: 'prod-codemagic-token',
     CODEMAGIC_APP_ID: 'prod-app',
     CODEMAGIC_WORKFLOW_ID: 'android-m1',
+    ORREMOTE_RELEASE_GITHUB_TOKEN: 'github-release-token',
   });
 
   assert.equal(config.supabaseUrl, '');
   assert.equal(config.supabasePublishableKey, '');
   assert.equal(config.orremoteBusSecret, '');
   assert.equal(config.codemagicApiToken, '');
+  assert.equal(config.releaseGithubToken, '');
 });

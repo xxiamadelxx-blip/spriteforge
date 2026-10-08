@@ -67,6 +67,10 @@ test('public OAuth metadata is available at both RFC 9728 resource paths', async
     assert.equal(body.resource, cfg.mcpResource);
     assert.deepEqual(body.authorization_servers, [cfg.oauthIssuer]);
   }
+  const health = await (await fetch(`${base}/health`)).json();
+  assert.equal(health.oauth_revocation_supported, true);
+  assert.equal(health.oauth_revocation_durable, false);
+
   const as = await fetch(`${base}/.well-known/oauth-authorization-server`);
   assert.equal(as.status, 200);
   const metadata = await as.json();
@@ -139,6 +143,39 @@ test('authorization form uses signed request state and token endpoint enforces o
   });
   assert.equal(replay.status, 400);
   assert.equal((await replay.json()).error, 'invalid_grant');
+
+  const revoke = await fetch(`${base}/oauth/revoke`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      token: tokens.refresh_token,
+      client_id: cfg.allowedClientId,
+    }),
+  });
+  assert.equal(revoke.status, 200);
+  assert.equal(revoke.headers.get('cache-control'), 'no-store');
+
+  const forbidden = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${tokens.access_token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
+  });
+  assert.equal(forbidden.status, 401);
+  const refresh = await fetch(`${base}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+      client_id: cfg.allowedClientId,
+      resource: cfg.mcpResource,
+    }),
+  });
+  assert.equal(refresh.status, 400);
+  assert.equal((await refresh.json()).error, 'invalid_grant');
 });
 
 test('public /mcp is mounted and unauthenticated callers receive OAuth discovery challenge', async (t) => {

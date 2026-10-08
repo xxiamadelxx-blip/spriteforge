@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { createCredential, verifyCredential } from './credentials.js';
+import { createOAuthRevocationStore } from './oauth-revocations.js';
+import { createSupabaseOAuthRevocationBackend } from './oauth-supabase-backend.js';
 
 const SUPPORTED_SCOPES = ['android.observe', 'android.control'];
 
@@ -56,6 +58,26 @@ function validateRequestObject(config, candidate) {
 
 export function createOAuthService({ config, deviceRelay }) {
   const authorizationCodes = new Map();
+  const backend = config.oauthRevocationBackend === 'supabase'
+    ? createSupabaseOAuthRevocationBackend(config)
+    : null;
+  const revoked = createOAuthRevocationStore(config.oauthRevocationFile, backend);
+
+  // Earlier signed refresh tokens lacked a shared grant_id. Deriving a stable
+  // per-token identity allows a no-pairing migration and prevents a previously
+  // issued legacy refresh from recreating independent grants after revocation.
+  function grantIdFor(payload) {
+    if (typeof payload?.grant_id === 'string' && /^[A-Za-z0-9_-]{22}$/.test(payload.grant_id)) {
+      return payload.grant_id;
+    }
+    if ((payload?.kind === 'oauth_refresh' || payload?.kind === 'oauth_access')
+      && typeof payload.jti === 'string' && payload.jti.length >= 16) {
+      return crypto.createHash('sha256')
+        .update('orremote-legacy-grant/' + payload.kind + '/' + payload.jti)
+        .digest('base64url').slice(0, 22);
+    }
+    return null;
+  }
 
   function protectedResourceMetadata() {
     return {
@@ -71,6 +93,8 @@ export function createOAuthService({ config, deviceRelay }) {
       issuer: config.oauthIssuer,
       authorization_endpoint: `${config.oauthIssuer}/oauth/authorize`,
       token_endpoint: `${config.oauthIssuer}/oauth/token`,
+      revocation_endpoint: `${config.oauthIssuer}/oauth/revoke`,
+      revocation_endpoint_auth_methods_supported: ['none'],
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
@@ -160,6 +184,7 @@ export function createOAuthService({ config, deviceRelay }) {
       pairId: pairing.pairId,
       codeChallenge: resolvedRequest.codeChallenge,
       codeChallengeMethod: resolvedRequest.codeChallengeMethod,
+      grantId: crypto.randomBytes(16).toString('base64url'),
       expiresAt: Date.now() + Number(config.oauthCodeTtlMs),
     });
 
@@ -188,6 +213,7 @@ export function createOAuthService({ config, deviceRelay }) {
       pair_id: record.pairId,
       scopes: [...record.scopes],
       client_id: record.clientId,
+      grant_id: record.grantId || crypto.randomBytes(16).toString('base64url'),
     };
     return {
       token_type: 'Bearer',
@@ -231,7 +257,7 @@ export function createOAuthService({ config, deviceRelay }) {
       audience: config.mcpResource,
       clientId,
     });
-    if (!payload || resource !== config.mcpResource) throw oauthError('invalid_grant');
+    if (!payload || resource !== config.mcpResource || revoked.isRevoked(grantIdFor(payload))) throw oauthError('invalid_grant');
 
     const requested = scope ? parseScopes(scope) : [...payload.scopes];
     if (requested.some((item) => !payload.scopes.includes(item))) throw oauthError('invalid_scope');
@@ -240,17 +266,38 @@ export function createOAuthService({ config, deviceRelay }) {
       clientId: payload.client_id,
       deviceId: payload.device_id,
       pairId: payload.pair_id,
+      grantId: grantIdFor(payload),
       scopes: requested,
     });
   }
 
   function verifyAccessToken(token, requiredScope = null) {
-    return verifyCredential(config, token, {
+    const claims = verifyCredential(config, token, {
       kind: 'oauth_access',
       issuer: config.oauthIssuer,
       audience: config.mcpResource,
       requiredScope,
     });
+    return claims && !revoked.isRevoked(grantIdFor(claims)) ? claims : null;
+  }
+
+  function revokeToken({ token, clientId }) {
+    // Public OAuth clients authenticate the request by possession of a valid
+    // issued token. A stolen/invalid token cannot revoke someone else's grant.
+    if (!clientId || clientId !== config.allowedClientId) return false;
+    const requirements = {
+      issuer: config.oauthIssuer,
+      audience: config.mcpResource,
+      clientId,
+    };
+    const claims = verifyCredential(config, token, { ...requirements, kind: 'oauth_access' })
+      || verifyCredential(config, token, { ...requirements, kind: 'oauth_refresh' });
+    const grantId = grantIdFor(claims);
+    if (!grantId) return false;
+    return revoked.revoke(grantId, Math.max(
+      Number(config.oauthRefreshTtlMs),
+      Number(config.oauthAccessTtlMs),
+    ) + 60_000);
   }
 
   return {
@@ -264,5 +311,9 @@ export function createOAuthService({ config, deviceRelay }) {
     exchangeAuthorizationCode,
     refresh,
     verifyAccessToken,
+    revokeToken,
+    revocationDurable: revoked.durable,
+    get revocationReady() { return revoked.ready; },
+    initializeRevocations: () => revoked.initialize(),
   };
 }

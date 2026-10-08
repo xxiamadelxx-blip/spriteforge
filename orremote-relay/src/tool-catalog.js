@@ -75,6 +75,21 @@ export const ANDROID_TOOLS = Object.freeze([
     scope: 'android.control',
   }),
   tool({
+    name: 'ui.editor_action',
+    title: 'Submit semantic editor action',
+    description: 'Request the focused editor’s native IME action on one exact editable Accessibility target after revision validation. This never sends a global Enter key or coordinate tap; business success must be verified separately.',
+    inputSchema: z.object({
+      expected_revision: expectedRevision,
+      selector_kind: selectorKind,
+      selector_value: z.string().min(1),
+    }).strict(),
+    risk: 'R1',
+    permissionScope: 'ui.control',
+    timeoutMs: 5_000,
+    readOnly: false,
+    scope: 'android.control',
+  }),
+  tool({
     name: 'touch.tap',
     title: 'Coordinate tap fallback',
     description: 'Fallback tap by absolute display coordinates. Requires expected_revision and still verifies the resulting state.',
@@ -143,7 +158,7 @@ export const ANDROID_TOOLS = Object.freeze([
   tool({
     name: 'app.list',
     title: 'List launchable apps',
-    description: 'List launchable applications and package names visible to Ø Remote.',
+    description: 'List launchable applications with package name, label, version name and version code visible to Ø Remote.',
     inputSchema: noArgs,
     risk: 'R0',
     permissionScope: 'app.discovery',
@@ -179,7 +194,64 @@ const SKILL_RUN_TOOL = tool({
   scope: 'android.control',
 });
 
-export const TOOLS = Object.freeze([...ANDROID_TOOLS, SKILL_RUN_TOOL]);
+// Stable, agent-facing aliases. The existing primitive and skill.run contracts remain intact.
+const AGENT_FRONT_DOOR_TOOLS = Object.freeze([
+  tool({
+    name: 'orremote.status',
+    title: 'Ø Remote connection status',
+    description: 'Check this authenticated phone connection and available operations before attempting any phone action. No re-pair or Android command is initiated.',
+    inputSchema: noArgs,
+    risk: 'R0', permissionScope: 'agent.status', timeoutMs: 1_500,
+    readOnly: true, scope: 'android.observe',
+  }),
+  tool({
+    name: 'orremote.observe',
+    title: 'Observe the paired phone',
+    description: 'Read the fresh, privacy-filtered Android semantic observation. Internally uses the existing screen.observe primitive.',
+    inputSchema: noArgs,
+    risk: 'R0', permissionScope: 'screen.observe', timeoutMs: 2_500,
+    readOnly: true, scope: 'android.observe',
+  }),
+  tool({
+    name: 'orremote.list_skills',
+    title: 'Discover approved Ø Remote skills',
+    description: 'List registered high-level skills, input schemas, providers and availability. If online, performs one read-only Android app.list lookup; never controls the phone.',
+    inputSchema: noArgs,
+    risk: 'R0', permissionScope: 'skills.discover', timeoutMs: 1_500,
+    readOnly: true, scope: 'android.observe',
+  }),
+  tool({
+    name: 'orremote.run_skill',
+    title: 'Run a bounded Ø Remote skill',
+    description: 'Execute a registered skill through the existing verified relay runtime and its user-only authorization, revision, postcondition and no-blind-replay protections.',
+    inputSchema: SKILL_RUN_TOOL.inputSchema,
+    risk: 'R1', permissionScope: 'skills.execute', timeoutMs: 120_000,
+    readOnly: false, scope: 'android.control',
+  }),
+  Object.freeze({
+    ...tool({
+      name: 'orremote.disconnect',
+      title: 'Disconnect this Ø Remote agent',
+      description: 'Only when the user explicitly requests to disconnect this agent: revoke the current OAuth connection (not the phone pairing). Requires confirm=true. This cannot be undone without user OAuth reauthorization.',
+      inputSchema: z.object({ confirm: z.literal(true) }).strict(),
+      risk: 'R2', permissionScope: 'agent.disconnect', timeoutMs: 5_000,
+      readOnly: false, scope: 'android.observe',
+    }),
+    annotations: {
+      readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false,
+    },
+  }),
+  tool({
+    name: 'orremote.app_list',
+    title: 'List phone apps',
+    description: 'Read the installed launchable apps of the paired phone through the existing app.list primitive.',
+    inputSchema: noArgs,
+    risk: 'R0', permissionScope: 'app.discovery', timeoutMs: 2_500,
+    readOnly: true, scope: 'android.observe',
+  }),
+]);
+
+export const TOOLS = Object.freeze([...ANDROID_TOOLS, SKILL_RUN_TOOL, ...AGENT_FRONT_DOOR_TOOLS]);
 
 const BY_NAME = new Map(TOOLS.map((entry) => [entry.name, entry]));
 

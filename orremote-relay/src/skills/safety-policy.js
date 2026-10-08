@@ -72,6 +72,7 @@ const ALLOWED_NATIVE_STEP_TYPES = new Set([
   'CLICK_EXACT_SELECTOR',
   'TAP_EXACT_SELECTOR_CENTER',
   'SET_TEXT_EXACT_SELECTOR',
+  'SUBMIT_EDITOR_EXACT_SELECTOR',
   'ASSERT_EXACT_TEXT',
   'SCROLL_DOWN',
 ]);
@@ -118,7 +119,7 @@ function basicPlanValidation(steps, allowedTypes, forbiddenClickPattern) {
     const label = planFieldLabel(step);
     if (
       step.sensitive === true
-      || ((type.startsWith('SET_TEXT') || type === 'CAPTURE_EXACT_SELECTOR_TEXT') && AUTH_FIELD_PATTERN.test(label))
+      || ((type.startsWith('SET_TEXT') || type === 'SUBMIT_EDITOR_EXACT_SELECTOR' || type === 'CAPTURE_EXACT_SELECTOR_TEXT') && AUTH_FIELD_PATTERN.test(label))
     ) {
       return {
         ok: false,
@@ -128,7 +129,7 @@ function basicPlanValidation(steps, allowedTypes, forbiddenClickPattern) {
     }
 
     if (
-      (type.startsWith('CLICK') || type === 'TAP_EXACT_SELECTOR_CENTER')
+      (type.startsWith('CLICK') || type === 'TAP_EXACT_SELECTOR_CENTER' || type === 'SUBMIT_EDITOR_EXACT_SELECTOR')
       && forbiddenClickPattern
       && forbiddenClickPattern.test(label)
     ) {

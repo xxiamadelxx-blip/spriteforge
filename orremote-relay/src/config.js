@@ -34,6 +34,8 @@ export function loadConfig(env = process.env) {
     oauthCodeTtlMs: positiveNumber(env.OAUTH_CODE_TTL_MS, 5 * 60 * 1000),
     oauthAccessTtlMs: positiveNumber(env.OAUTH_ACCESS_TTL_MS, 10 * 60 * 1000),
     oauthRefreshTtlMs: positiveNumber(env.OAUTH_REFRESH_TTL_MS, 30 * 24 * 60 * 60 * 1000),
+    oauthRevocationFile: String(env.OREMOTE_OAUTH_REVOCATION_FILE || ''),
+    oauthRevocationBackend: String(env.OREMOTE_OAUTH_REVOCATION_BACKEND || ''),
     workSessionTtlMs: positiveNumber(env.WORK_SESSION_TTL_MS, 60 * 60 * 1000),
     maxBodyBytes: positiveNumber(env.MAX_BODY_BYTES, 1024 * 1024),
     pairAttemptWindowMs: positiveNumber(env.PAIR_ATTEMPT_WINDOW_MS, 10 * 60 * 1000),
@@ -47,6 +49,9 @@ export function loadConfig(env = process.env) {
     codemagicApiToken: isolatedTest ? '' : String(env.CM_API_TOKEN || ''),
     codemagicAppId: String(env.CODEMAGIC_APP_ID || '6aa6542caf15c45faf8dbe96'),
     codemagicWorkflowId: String(env.CODEMAGIC_WORKFLOW_ID || 'android-m1'),
+    releaseGithubToken: isolatedTest ? '' : String(env.OREMOTE_RELEASE_GITHUB_TOKEN || ''),
+    releaseSourceRepo: String(env.OREMOTE_RELEASE_SOURCE_REPO || 'xxiamadelxx-blip/-remote'),
+    releaseIdentity: loadReleaseIdentity(),
     artifactTransferTimeoutMs: positiveNumber(env.ARTIFACT_TRANSFER_TIMEOUT_MS, 30_000),
     artifactDownloadTtlMs: positiveNumber(env.ARTIFACT_DOWNLOAD_TTL_MS, 15 * 60 * 1000),
     artifactMaxBytes: positiveNumber(env.ARTIFACT_MAX_BYTES, 32 * 1024 * 1024),
@@ -54,3 +59,4 @@ export function loadConfig(env = process.env) {
     artifactStagingDir: String(env.ARTIFACT_STAGING_DIR || ''),
   };
 }
+import { loadReleaseIdentity } from './release-identity.js';
