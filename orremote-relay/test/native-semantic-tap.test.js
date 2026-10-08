@@ -38,17 +38,39 @@ function snapshot(revision, extra = {}) {
 test('native exact plan taps the center of a fresh exact semantic node instead of using fixed coordinates', async () => {
   const calls = [];
   let observes = 0;
-  const skill = createNativeExactPlanSkill({ id: 'test.native.tap', packages: ['com.deepseek.chat'], effect: 'conversation_write', risk: 'R2' });
+  const skill = createNativeExactPlanSkill({
+    id: 'test.native.tap',
+    packages: ['com.deepseek.chat'],
+    effect: 'conversation_write',
+    risk: 'R2',
+  });
   const runtime = createSkillRuntime({
     registry: createSkillRegistry([skill]),
     invokePrimitive: async (name, args) => {
       calls.push({ name, args });
-      if (name === 'screen.observe') { observes += 1; return snapshot(observes === 1 ? 235 : 236); }
-      if (name === 'touch.tap') return { isError: false, structuredContent: { status: 'VERIFIED', after_revision: 236 } };
+      if (name === 'screen.observe') {
+        observes += 1;
+        return snapshot(observes === 1 ? 235 : 236);
+      }
+      if (name === 'touch.tap') {
+        return { isError: false, structuredContent: { status: 'VERIFIED', after_revision: 236 } };
+      }
       throw new Error(`Unexpected primitive ${name}`);
     },
   });
-  const output = await runtime.run({ skillId: 'test.native.tap', inputs: { package: 'com.deepseek.chat', steps: [{ type: 'TAP_EXACT_SELECTOR_CENTER', selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' } }] }, limits: { maxTransitions: 8, deadlineMs: 10_000 } });
+
+  const output = await runtime.run({
+    skillId: 'test.native.tap',
+    inputs: {
+      package: 'com.deepseek.chat',
+      steps: [{
+        type: 'TAP_EXACT_SELECTOR_CENTER',
+        selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' },
+      }],
+    },
+    limits: { maxTransitions: 8, deadlineMs: 10_000 },
+  });
+
   assert.equal(output.status, 'COMPLETED');
   const taps = calls.filter((entry) => entry.name === 'touch.tap');
   assert.equal(taps.length, 1);
@@ -63,16 +85,44 @@ test('native exact plan taps the center of a fresh exact semantic node instead o
 });
 
 test('semantic anchored tap refuses sensitive targets', async () => {
-  const skill = createNativeExactPlanSkill({ id: 'test.native.tap.sensitive', packages: ['com.deepseek.chat'], effect: 'conversation_write', risk: 'R2' });
-  const runtime = createSkillRuntime({ registry: createSkillRegistry([skill]), invokePrimitive: async (name) => { if (name === 'screen.observe') return snapshot(235, { sensitive: true }); throw new Error(`Unexpected primitive ${name}`); } });
-  const output = await runtime.run({ skillId: 'test.native.tap.sensitive', inputs: { package: 'com.deepseek.chat', steps: [{ type: 'TAP_EXACT_SELECTOR_CENTER', selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' } }] } });
+  const skill = createNativeExactPlanSkill({
+    id: 'test.native.tap.sensitive',
+    packages: ['com.deepseek.chat'],
+    effect: 'conversation_write',
+    risk: 'R2',
+  });
+  const runtime = createSkillRuntime({
+    registry: createSkillRegistry([skill]),
+    invokePrimitive: async (name) => {
+      if (name === 'screen.observe') return snapshot(235, { sensitive: true });
+      throw new Error(`Unexpected primitive ${name}`);
+    },
+  });
+
+  const output = await runtime.run({
+    skillId: 'test.native.tap.sensitive',
+    inputs: {
+      package: 'com.deepseek.chat',
+      steps: [{
+        type: 'TAP_EXACT_SELECTOR_CENTER',
+        selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' },
+      }],
+    },
+  });
+
   assert.equal(output.status, 'STOPPED');
   assert.equal(output.error_code, 'USER_AUTH_REQUIRED');
 });
 
+
 test('semantic anchored tap stops before touch dispatch when Android reports the center occluded', async () => {
   const calls = [];
-  const skill = createNativeExactPlanSkill({ id: 'test.native.tap.occluded', packages: ['com.deepseek.chat'], effect: 'conversation_write', risk: 'R2' });
+  const skill = createNativeExactPlanSkill({
+    id: 'test.native.tap.occluded',
+    packages: ['com.deepseek.chat'],
+    effect: 'conversation_write',
+    risk: 'R2',
+  });
   const runtime = createSkillRuntime({
     registry: createSkillRegistry([skill]),
     invokePrimitive: async (name) => {
@@ -81,7 +131,15 @@ test('semantic anchored tap stops before touch dispatch when Android reports the
       throw new Error(`Unexpected primitive ${name}`);
     },
   });
-  const output = await runtime.run({ skillId: 'test.native.tap.occluded', inputs: { package: 'com.deepseek.chat', steps: [{ type: 'TAP_EXACT_SELECTOR_CENTER', selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' } }] } });
+
+  const output = await runtime.run({
+    skillId: 'test.native.tap.occluded',
+    inputs: {
+      package: 'com.deepseek.chat',
+      steps: [{ type: 'TAP_EXACT_SELECTOR_CENTER', selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' } }],
+    },
+  });
+
   assert.equal(output.status, 'STOPPED');
   assert.equal(output.error_code, 'TARGET_OCCLUDED');
   assert.equal(calls.includes('touch.tap'), false);
@@ -89,7 +147,12 @@ test('semantic anchored tap stops before touch dispatch when Android reports the
 
 test('semantic anchored tap fails closed before touch dispatch when hit evidence is incomplete', async () => {
   const calls = [];
-  const skill = createNativeExactPlanSkill({ id: 'test.native.tap.unknown-hit', packages: ['com.deepseek.chat'], effect: 'conversation_write', risk: 'R2' });
+  const skill = createNativeExactPlanSkill({
+    id: 'test.native.tap.unknown-hit',
+    packages: ['com.deepseek.chat'],
+    effect: 'conversation_write',
+    risk: 'R2',
+  });
   const runtime = createSkillRuntime({
     registry: createSkillRegistry([skill]),
     invokePrimitive: async (name) => {
@@ -102,7 +165,15 @@ test('semantic anchored tap fails closed before touch dispatch when hit evidence
       throw new Error(`Unexpected primitive ${name}`);
     },
   });
-  const output = await runtime.run({ skillId: 'test.native.tap.unknown-hit', inputs: { package: 'com.deepseek.chat', steps: [{ type: 'TAP_EXACT_SELECTOR_CENTER', selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' } }] } });
+
+  const output = await runtime.run({
+    skillId: 'test.native.tap.unknown-hit',
+    inputs: {
+      package: 'com.deepseek.chat',
+      steps: [{ type: 'TAP_EXACT_SELECTOR_CENTER', selector: { kind: 'TEXT', value: 'Напишите или удерживайте, чтобы говорить' } }],
+    },
+  });
+
   assert.equal(output.status, 'STOPPED');
   assert.equal(output.error_code, 'TARGET_HIT_UNVERIFIABLE');
   assert.equal(calls.includes('touch.tap'), false);
