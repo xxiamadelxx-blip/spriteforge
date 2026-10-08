@@ -186,6 +186,7 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
 
       if (req.method === 'GET' && url.pathname === '/health') {
         json(res, 200, {
+          schema_version: 1,
           ok: true,
           service: 'orremote-relay',
           auth_mode: 'stateless-signed-credentials-v1',
@@ -197,8 +198,12 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
           artifact_download_ttl_seconds: Math.floor(config.artifactDownloadTtlMs / 1000),
           mcp_plugin: true,
           oauth_configured: Boolean(config.allowedClientId && config.allowedRedirectUris.length),
+          oauth_revocation_supported: true,
+          oauth_revocation_durable: oauth.revocationDurable && oauth.revocationReady,
           work_console: true,
           supabase_bus: Boolean(commandBus?.enabled),
+          relay_source_sha: config.releaseIdentity?.sourceSha || null,
+          build_manifest_hash: config.releaseIdentity?.manifestHash || null,
         });
         return;
       }
@@ -358,6 +363,22 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/oauth/revoke') {
+        // RFC 7009: unknown tokens get the same generic response; never expose
+        // whether a credential exists. Only a valid issued token can revoke itself.
+        const form = await readForm(req, config.maxBodyBytes);
+        try {
+          await oauth.revokeToken({
+            token: String(form.get('token') || ''),
+            clientId: String(form.get('client_id') || ''),
+          });
+          json(res, 200, {}, { pragma: 'no-cache' });
+        } catch {
+          json(res, 503, { error: 'revocation_store_unavailable' });
+        }
+        return;
+      }
+
       if (url.pathname === '/mcp') {
         await mcpPluginHandler(req, res);
         return;
@@ -511,6 +532,7 @@ export function createRelayServer(config, deviceRelay, commandBus = null) {
     }
   });
 
+  server.initializeOAuthRevocations = () => oauth.initializeRevocations();
   server.on('upgrade', (req, socket, head) => deviceRelay.handleUpgrade(req, socket, head));
   return server;
 }
