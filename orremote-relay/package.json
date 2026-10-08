@@ -11,7 +11,6 @@
     "check": "for f in src/*.js test/*.test.js; do node --check \"$f\" || exit 1; done",
     "test": "OREMOTE_TEST_ISOLATED=1 RUN_LIVE_EXTERNAL_SMOKE=0 node --import ./test/test-env.js --test test/*.test.js",
     "test:live": "RUN_LIVE_EXTERNAL_SMOKE=1 node --test test/live-external-smoke.test.js",
-    "postinstall": "npm run check && npm test",
     "regression:check": "node scripts/regression-corpus.mjs --check",
     "regression:list": "node scripts/regression-corpus.mjs --list",
     "regression:run": "node scripts/regression-corpus.mjs --run"
