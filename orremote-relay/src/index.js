@@ -8,6 +8,9 @@ const deviceRelay = createDeviceRelay(config);
 const commandBus = createSupabaseCommandBus({ config, deviceRelay });
 const server = createRelayServer(config, deviceRelay, commandBus);
 
+// A persisted grant-denial journal must hydrate before the public listener
+// accepts even read-only OAuth requests. An outage fails startup closed.
+await server.initializeOAuthRevocations();
 commandBus.start();
 
 server.listen(config.port, config.host, () => {
