@@ -1,0 +1,24 @@
+name: Stage 3 Relay Candidate Verification
+on:
+  push:
+    branches:
+      - agent-entry-stage3-candidate-20261008
+  workflow_dispatch:
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install without lifecycle scripts
+        run: npm install --ignore-scripts
+        working-directory: orremote-relay
+      - name: Verify exact mirrored source
+        run: npm run check
+        working-directory: orremote-relay
+      - name: Run full relay tests
+        run: npm test
+        working-directory: orremote-relay
