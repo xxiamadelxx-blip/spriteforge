@@ -1,0 +1,22 @@
+name: Stage3 one-shot npm dependency advisory
+on:
+  push:
+    branches:
+      - agent-entry-stage3-candidate-20261008
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install runtime dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+        working-directory: orremote-relay
+      - name: Inspect advisory only, do not fail or modify runtime
+        run: |
+          npm audit --omit=dev --json > /tmp/orremote-audit.json || true
+          node -e "const a=require('/tmp/orremote-audit.json'); for(const [n,v] of Object.entries(a.vulnerabilities||{})){ console.log(JSON.stringify({pkg:n,severity:v.severity,range:v.range,fixAvailable:v.fixAvailable,via:(v.via||[]).map(x=>typeof x==='string'?x:{title:x.title,url:x.url,range:x.range})})); } console.log('TOTAL',JSON.stringify(a.metadata?.vulnerabilities||{}));"
+        working-directory: orremote-relay
