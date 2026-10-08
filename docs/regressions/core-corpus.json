@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "kind": "opt-in-developer-regressions",
+  "description": "Repository-owned source/fixture tests only. Never Android physical acceptance, never a new CI gate.",
+  "groups": [
+    {
+      "id": "auth",
+      "boundary": "User-only auth, token scope and untrusted UI must stop unsafe reads/writes before provider hooks.",
+      "evidence_class": "automated-source-test",
+      "phone_acceptance": "NOT_CLAIMED",
+      "test_files": [
+        "test/oauth-grant-revocation.test.js",
+        "test/server-oauth-http.test.js",
+        "test/rq1a-security-regression.test.js"
+      ]
+    },
+    {
+      "id": "display",
+      "boundary": "Semantic target ownership binds display, window, topology and revision; no secondary-display fallback.",
+      "evidence_class": "automated-source-test",
+      "phone_acceptance": "NOT_CLAIMED",
+      "test_files": [
+        "test/native-semantic-tap.test.js",
+        "test/native-visible-ui.test.js",
+        "test/cir-b-b5-provider-postconditions.test.js"
+      ]
+    },
+    {
+      "id": "ime",
+      "boundary": "Editor actions use fresh revision-bound target and do not act on unrelated IME overlays.",
+      "evidence_class": "automated-source-test",
+      "phone_acceptance": "NOT_CLAIMED",
+      "test_files": [
+        "test/native-editor-action.test.js",
+        "test/skills-runtime-set-text.test.js",
+        "test/skills-native-capture-wait.test.js"
+      ]
+    },
+    {
+      "id": "stale-state",
+      "boundary": "Changed window/revision, timeout and post-action uncertainty fail closed without blind replay.",
+      "evidence_class": "automated-source-test",
+      "phone_acceptance": "NOT_CLAIMED",
+      "test_files": [
+        "test/skills-runtime-attempt-gate.test.js",
+        "test/skills-runtime-session-recovery.test.js",
+        "test/native-semantic-tap.test.js"
+      ]
+    },
+    {
+      "id": "postconditions",
+      "boundary": "Meaningful action success requires a fresh scoped semantic after-state; unknown is not PASS.",
+      "evidence_class": "automated-source-test",
+      "phone_acceptance": "NOT_CLAIMED",
+      "test_files": [
+        "test/skills-postconditions.test.js",
+        "test/cir-b-b4-native-postcondition.test.js",
+        "test/cir-b-b5-provider-postconditions.test.js"
+      ]
+    },
+    {
+      "id": "relay",
+      "boundary": "MCP scopes, durable revocation and relay command-bus boundaries remain enforced.",
+      "evidence_class": "automated-source-test",
+      "phone_acceptance": "NOT_CLAIMED",
+      "test_files": [
+        "test/oauth-remote-revocations.test.js",
+        "test/oauth-supabase-backend.test.js",
+        "test/mcp-plugin.test.js",
+        "test/supabase-command-bus.test.js",
+        "test/device-liveness.test.js"
+      ]
+    },
+    {
+      "id": "skills",
+      "boundary": "M5 registry, runtime and safety policy preserve explicit workflows and bounded recovery.",
+      "evidence_class": "automated-source-test",
+      "phone_acceptance": "NOT_CLAIMED",
+      "test_files": [
+        "test/skills-runtime.test.js",
+        "test/skills-runtime-safety.test.js",
+        "test/skills-default-registry.test.js",
+        "test/skills-safety-policy.test.js"
+      ]
+    }
+  ]
+}

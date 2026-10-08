@@ -57,3 +57,24 @@ test('corrupt or unavailable RPC hydration never releases token access', async (
 test('remote revocation store rejects simultaneous local file and RPC backends', () => {
   assert.throws(()=>createOAuthRevocationStore('/tmp/unused-revocations.json',{async load(){return [];},async revoke(){return true;}}),/REVOCATION_STORE_CONFLICT/);
 });
+
+
+test('parallel remote revocations cannot resurrect an earlier grant after both RPC writes succeed', async () => {
+  const pending = [];
+  const store = createOAuthRevocationStore('', {
+    async load() { return []; },
+    revoke(id, expires_at) {
+      return new Promise((resolve) => pending.push({ id, expires_at, resolve }));
+    },
+  });
+  await store.initialize();
+  const first = store.revoke(ID, 86_400_000);
+  const second = store.revoke(OTHER, 86_400_000);
+  assert.equal(pending.length, 2);
+  pending[0].resolve(true);
+  assert.equal(await first, true);
+  pending[1].resolve(true);
+  assert.equal(await second, true);
+  assert.equal(store.isRevoked(ID), true, 'first confirmed revocation must remain effective');
+  assert.equal(store.isRevoked(OTHER), true, 'second confirmed revocation must also remain effective');
+});

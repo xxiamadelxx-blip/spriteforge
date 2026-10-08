@@ -70,8 +70,13 @@ export function createOAuthRevocationStore(filePath = '', remoteBackend = null) 
       if (!ready) throw new Error('REVOCATION_STORE_UNAVAILABLE');
       return Promise.resolve(remoteBackend.revoke(id, expires)).then((confirmed) => {
         if (confirmed !== true) throw new Error('REVOCATION_STORE_UNAVAILABLE');
-        revocations.clear();
-        for (const [key, expiry] of next) revocations.set(key, expiry);
+        // Apply only the RPC-confirmed grant. A concurrent revoke may have
+        // committed while this request was in flight: replacing a stale
+        // snapshot would re-enable that already-revoked grant.
+        revocations.set(id, Math.max(expires, revocations.get(id) || 0));
+        for (const [key, expiry] of revocations) {
+          if (expiry <= Date.now()) revocations.delete(key);
+        }
         return true;
       });
     }
