@@ -119,18 +119,20 @@ test('skill.run executes in relay and completes through the same command result 
 test('transport failure is recorded once and never replayed by processOnce', async () => {
   const calls = [];
   let forwarded = 0;
+  let forwardedRequest = null;
   const fetchImpl = fakeFetch([
-    { rpc: 'orremote_claim_command', body: [{ command_id: '22222222-2222-4222-8222-222222222222', device_id: 'b'.repeat(24), pair_id: 'pair-generation-abcdefghij', tool_name: 'ui.click', arguments: { expected_revision: 7, selector_kind: 'TEXT', selector_value: 'Test', exact: true } }] },
+    { rpc: 'orremote_claim_command', body: [{ command_id: '22222222-2222-4222-8222-222222222222', device_id: 'b'.repeat(24), pair_id: 'pair-generation-abcdefghij', tool_name: 'ui.editor_action', arguments: { expected_revision: 7, selector_kind: 'HANDLE', selector_value: 'editor-7' } }] },
     { rpc: 'orremote_fail_command', body: true },
     { rpc: 'orremote_claim_command', body: [] },
   ], calls);
   const bus = createSupabaseCommandBus({
     config: configured(), fetchImpl,
-    deviceRelay: { async forwardMcp() { forwarded += 1; const e = new Error('DEVICE_TIMEOUT'); e.code = 'DEVICE_TIMEOUT'; throw e; } },
+    deviceRelay: { async forwardMcp(request) { forwardedRequest = request; forwarded += 1; const e = new Error('DEVICE_TIMEOUT'); e.code = 'DEVICE_TIMEOUT'; throw e; } },
   });
   assert.equal(await bus.processOnce(), 'failed');
   assert.equal(await bus.processOnce(), 'idle');
   assert.equal(forwarded, 1);
+  assert.equal(JSON.parse(forwardedRequest.body).params.name, 'ui.editor_action');
   assert.equal(calls.filter((c) => c.rpc === 'orremote_fail_command').length, 1);
 });
 

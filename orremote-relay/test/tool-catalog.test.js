@@ -6,6 +6,7 @@ const ANDROID_NAMES = [
   'screen.observe',
   'ui.click',
   'ui.set_text',
+  'ui.editor_action',
   'touch.tap',
   'touch.swipe',
   'system.back',
@@ -15,14 +16,16 @@ const ANDROID_NAMES = [
   'app.launch',
 ];
 
-test('Android primitive catalog remains exactly the ten accepted tools', () => {
+test('Android primitive catalog includes the revision-bound semantic editor action', () => {
   assert.deepEqual(ANDROID_TOOLS.map((tool) => tool.name), ANDROID_NAMES);
-  assert.equal(new Set(ANDROID_TOOLS.map((tool) => tool.name)).size, 10);
+  assert.equal(new Set(ANDROID_TOOLS.map((tool) => tool.name)).size, 11);
 });
 
-test('public MCP catalog adds one relay-hosted skill.run capability', () => {
-  assert.deepEqual(TOOLS.map((tool) => tool.name), [...ANDROID_NAMES, 'skill.run']);
-  assert.equal(new Set(TOOLS.map((tool) => tool.name)).size, 11);
+test('public MCP catalog preserves primitives and adds a scoped zero-context façade', () => {
+  const agentNames = ['orremote.status', 'orremote.observe', 'orremote.list_skills',
+    'orremote.run_skill', 'orremote.disconnect', 'orremote.app_list'];
+  assert.deepEqual(TOOLS.map((tool) => tool.name), [...ANDROID_NAMES, 'skill.run', ...agentNames]);
+  assert.equal(new Set(TOOLS.map((tool) => tool.name)).size, 18);
   const skill = toolByName('skill.run');
   assert.equal(skill.scope, 'android.control');
   assert.equal(skill.annotations.readOnlyHint, false);
@@ -34,7 +37,7 @@ test('public MCP catalog adds one relay-hosted skill.run capability', () => {
 });
 
 test('observe tools are read-only and control tools require android.control', () => {
-  for (const name of ['screen.observe', 'screen.screenshot', 'app.list']) {
+  for (const name of ['screen.observe', 'screen.screenshot', 'app.list', 'orremote.status', 'orremote.observe', 'orremote.list_skills', 'orremote.app_list']) {
     const tool = toolByName(name);
     assert.equal(tool.scope, 'android.observe');
     assert.equal(tool.annotations.readOnlyHint, true);
@@ -42,7 +45,7 @@ test('observe tools are read-only and control tools require android.control', ()
     assert.equal(tool.annotations.openWorldHint, false);
   }
 
-  for (const name of ['ui.click', 'ui.set_text', 'touch.tap', 'touch.swipe', 'system.back', 'system.home', 'app.launch', 'skill.run']) {
+  for (const name of ['ui.click', 'ui.set_text', 'ui.editor_action', 'touch.tap', 'touch.swipe', 'system.back', 'system.home', 'app.launch', 'skill.run', 'orremote.run_skill']) {
     const tool = toolByName(name);
     assert.equal(tool.scope, 'android.control');
     assert.equal(tool.annotations.readOnlyHint, false);
@@ -90,6 +93,25 @@ test('ui.set_text schema accepts HANDLE but still requires expected_revision', (
   }).success, false);
 });
 
+test('ui.editor_action requires an exact semantic selector and expected_revision', () => {
+  const action = toolByName('ui.editor_action');
+  assert.equal(action.inputSchema.safeParse({
+    expected_revision: 311,
+    selector_kind: 'HANDLE',
+    selector_value: 'observed-editable-handle',
+  }).success, true);
+  assert.equal(action.inputSchema.safeParse({
+    selector_kind: 'HANDLE',
+    selector_value: 'observed-editable-handle',
+  }).success, false);
+  assert.equal(action.inputSchema.safeParse({
+    expected_revision: 311,
+    selector_kind: 'HANDLE',
+    selector_value: 'observed-editable-handle',
+    key: 'ENTER',
+  }).success, false);
+});
+
 test('state-changing schemas reject unknown fields and preserve M2 field names', () => {
   assert.equal(toolByName('touch.tap').inputSchema.safeParse({ expected_revision: 1, x: 100, y: 200 }).success, true);
   assert.equal(toolByName('touch.tap').inputSchema.safeParse({ expected_revision: 1, x: 100, y: 200, extra: true }).success, false);
@@ -102,4 +124,19 @@ test('state-changing schemas reject unknown fields and preserve M2 field names',
     duration_ms: 250,
   }).success, true);
   assert.equal(toolByName('app.launch').inputSchema.safeParse({ package: 'com.android.settings' }).success, true);
+});
+
+test('agent facade contracts are strict, side-effect annotated and scope-separated', () => {
+  for (const name of ['orremote.status', 'orremote.observe', 'orremote.list_skills', 'orremote.app_list']) {
+    const tool = toolByName(name);
+    assert.equal(tool.inputSchema.safeParse({}).success, true);
+    assert.equal(tool.inputSchema.safeParse({ device_id: 'caller-supplied' }).success, false);
+    assert.equal(tool.scope, 'android.observe');
+    assert.equal(tool.annotations.readOnlyHint, true);
+  }
+  const run = toolByName('orremote.run_skill');
+  assert.equal(run.scope, 'android.control');
+  assert.equal(run.annotations.readOnlyHint, false);
+  assert.equal(run.inputSchema.safeParse({ skill_id: 'settings.device_info.read' }).success, true);
+  assert.equal(run.inputSchema.safeParse({ inputs: {} }).success, false);
 });
