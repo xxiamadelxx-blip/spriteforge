@@ -1,0 +1,283 @@
+workflows:
+  android-m1:
+    name: Ø Remote Android CI
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      android_signing:
+        - orremote_debug
+      java: 17
+      vars:
+        GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dkotlin.incremental=false"
+        GRADLE_VERSION: "9.5.0"
+        ORREMOTE_CI_HANDOFF_URL: "https://vxgnyoxkdqtboaikyqkg.supabase.co/rest/v1/rpc/orremote_ci_handoff"
+        ORREMOTE_CI_PUBLISHABLE_KEY: "sb_publishable_qvTpxyHL5JS9Taq-8aK2wg_k9fwojuy"
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: 'ci/android-build'
+          include: true
+          source: true
+        - pattern: 'm5/skills-runtime-yandex-pro'
+          include: true
+          source: true
+      cancel_previous_builds: true
+    when:
+      changeset:
+        includes:
+          - 'app/**'
+          - 'relay/**'
+          - 'build.gradle.kts'
+          - 'settings.gradle.kts'
+          - 'gradle.properties'
+          - 'gradle/**'
+          - 'gradlew'
+          - 'gradlew.bat'
+          - 'codemagic.yaml'
+    scripts:
+      - name: Verify immutable API release source
+        script: |
+          set -euxo pipefail
+          if [ "${CM_TRIGGER_SOURCE:-}" = "api" ]; then
+            test -n "${ORREMOTE_EXPECTED_COMMIT:-}"
+            test -n "${ORREMOTE_RELEASE_REQUEST_ID:-}"
+            test -n "${ORREMOTE_RELEASE_TAG:-}"
+            test "${CM_COMMIT:-}" = "$ORREMOTE_EXPECTED_COMMIT"
+            test "${CM_TAG:-}" = "$ORREMOTE_RELEASE_TAG"
+            test "$(git rev-parse HEAD)" = "$ORREMOTE_EXPECTED_COMMIT"
+            test "$(git rev-parse "$ORREMOTE_RELEASE_TAG^{commit}")" = "$ORREMOTE_EXPECTED_COMMIT"
+          fi
+
+      - name: Install relay dependencies without postinstall
+        script: |
+          set -euxo pipefail
+          mkdir -p "$CM_BUILD_DIR/.ci"
+          cd relay
+          npm install --ignore-scripts
+
+      - name: Relay syntax check
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          npm run check 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-syntax.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-syntax"; fi
+          exit "$STATUS"
+
+      - name: Relay test tool catalog
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          node --test test/tool-catalog.test.js 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-tool-catalog.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-tool-catalog"; fi
+          exit "$STATUS"
+
+      - name: Relay test device invoker
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          node --test test/skills-device-invoker.test.js 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-device-invoker.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-device-invoker"; fi
+          exit "$STATUS"
+
+      - name: Relay test skills runtime
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          node --test test/skills-runtime.test.js 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-skills-runtime.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-skills-runtime"; fi
+          exit "$STATUS"
+
+      - name: Relay test Yandex order iterator
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          node --test test/yandex-pro-order-iterator.test.js 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-yandex-order-iterator.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-yandex-order-iterator"; fi
+          exit "$STATUS"
+
+      - name: Relay test Yandex planned slot skill
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          node --test test/yandex-pro-planned-slot-orders.test.js 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-yandex-planned-slot.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-yandex-planned-slot"; fi
+          exit "$STATUS"
+
+      - name: Relay test MCP plugin
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          node --test test/mcp-plugin.test.js 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-mcp-plugin.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-mcp-plugin"; fi
+          exit "$STATUS"
+
+      - name: Relay test Supabase command bus
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          node --test test/supabase-command-bus.test.js 2>&1 | tee "$CM_BUILD_DIR/.ci/relay-supabase-command-bus.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-supabase-command-bus"; fi
+          exit "$STATUS"
+
+      - name: Relay full regression suite
+        ignore_failure: true
+        script: |
+          set +e
+          cd relay
+          npm test 2>&1 | tee "$CM_BUILD_DIR/.ci/orremote-relay-test.log"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then touch "$CM_BUILD_DIR/.ci/relay-fail-full-suite"; fi
+          exit "$STATUS"
+
+      - name: Relay diagnostics gate
+        script: |
+          set -euxo pipefail
+          FAILURES="$(find "$CM_BUILD_DIR/.ci" -maxdepth 1 -name 'relay-fail-*' -print | sort || true)"
+          if [ -n "$FAILURES" ]; then
+            echo "Relay verification failures:"
+            echo "$FAILURES"
+            exit 1
+          fi
+
+      - name: Prepare Android and Gradle toolchain
+        script: |
+          set -euxo pipefail
+          java -version
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
+
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ] && [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          if [ -z "$SDKMANAGER" ] && [ -n "${ANDROID_HOME:-}" ] && [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
+          if [ -x ./gradlew ]; then
+            GRADLE_CMD="./gradlew"
+          else
+            curl -fL --retry 3 "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o /tmp/gradle.zip
+            rm -rf "/tmp/gradle-${GRADLE_VERSION}"
+            unzip -q /tmp/gradle.zip -d /tmp
+            GRADLE_CMD="/tmp/gradle-${GRADLE_VERSION}/bin/gradle"
+          fi
+          "$GRADLE_CMD" --version
+          echo "GRADLE_CMD=$GRADLE_CMD" >> "$CM_ENV"
+
+      - name: Verify persistent signing identity
+        script: |
+          set -euxo pipefail
+          mkdir -p "$CM_BUILD_DIR/.ci"
+          test -n "${CM_KEYSTORE_PATH:-}"
+          test -f "$CM_KEYSTORE_PATH"
+          test -n "${CM_KEYSTORE_PASSWORD:-}"
+          test -n "${CM_KEY_ALIAS:-}"
+          test -n "${CM_KEY_PASSWORD:-}"
+          keytool -list -v \
+            -keystore "$CM_KEYSTORE_PATH" \
+            -storepass "$CM_KEYSTORE_PASSWORD" \
+            -alias "$CM_KEY_ALIAS" \
+            | awk '/SHA256:/{print; exit}' \
+            | tee "$CM_BUILD_DIR/.ci/signing-cert-sha256.txt"
+          test -s "$CM_BUILD_DIR/.ci/signing-cert-sha256.txt"
+
+      - name: Compile Android main sources
+        script: |
+          set -euxo pipefail
+          mkdir -p "$CM_BUILD_DIR/.ci"
+          "$GRADLE_CMD" --stacktrace compileDebugKotlin 2>&1 | tee "$CM_BUILD_DIR/.ci/android-compile-main.log"
+
+      - name: Compile Android unit tests
+        script: |
+          set -euxo pipefail
+          "$GRADLE_CMD" --stacktrace compileDebugUnitTestKotlin 2>&1 | tee "$CM_BUILD_DIR/.ci/android-compile-tests.log"
+
+      - name: Run Android unit tests
+        script: |
+          set -euxo pipefail
+          "$GRADLE_CMD" --stacktrace testDebugUnitTest 2>&1 | tee "$CM_BUILD_DIR/.ci/android-tests.log"
+
+      - name: Assemble debug APK
+        script: |
+          set -euxo pipefail
+          "$GRADLE_CMD" --stacktrace assembleDebug 2>&1 | tee "$CM_BUILD_DIR/.ci/orremote-build.log"
+
+      - name: Verify APK exists and signer matches CI identity
+        script: |
+          set -euxo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools/36.0.0/apksigner"
+          test -s "$APK"
+          test -x "$APKSIGNER"
+          ls -lh "$APK"
+          shasum -a 256 "$APK"
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee "$CM_BUILD_DIR/.ci/apk-signing-report.txt"
+          grep -q "Signer #1 certificate SHA-256 digest" "$CM_BUILD_DIR/.ci/apk-signing-report.txt"
+          touch "$HOME/.orremote-ci-success"
+
+    artifacts:
+      - app/build/outputs/apk/debug/*.apk
+      - app/build/reports/**
+      - app/build/test-results/**
+      - .ci/*.log
+      - .ci/signing-cert-sha256.txt
+      - .ci/apk-signing-report.txt
+
+    publishing:
+      scripts:
+        - name: Report CI handoff
+          script: |
+            set -u
+            STATUS="failure"
+            if [ -f "$HOME/.orremote-ci-success" ]; then
+              STATUS="success"
+            fi
+
+            ARTIFACTS="${CM_ARTIFACT_LINKS:-[]}"
+            if ! printf '%s' "$ARTIFACTS" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              ARTIFACTS='[]'
+            fi
+
+            COMMIT_SHA="$(git rev-parse HEAD)"
+            PAYLOAD="$(jq -n \
+              --arg repo "xxiamadelxx-blip/-remote" \
+              --arg workflow_id "android-m1" \
+              --arg branch "${CM_BRANCH:-ci/android-build}" \
+              --arg commit_sha "$COMMIT_SHA" \
+              --arg build_id "${CM_BUILD_ID:-}" \
+              --arg build_number "${BUILD_NUMBER:-}" \
+              --arg project_build_number "${PROJECT_BUILD_NUMBER:-}" \
+              --arg codemagic_project_id "${CM_PROJECT_ID:-}" \
+              --arg trigger_source "${CM_TRIGGER_SOURCE:-}" \
+              --arg status "$STATUS" \
+              --argjson artifact_links "$ARTIFACTS" \
+              '{p_repo:$repo,p_workflow_id:$workflow_id,p_branch:$branch,p_commit_sha:$commit_sha,p_build_id:$build_id,p_build_number:(if $build_number=="" then null else ($build_number|tonumber) end),p_project_build_number:(if $project_build_number=="" then null else ($project_build_number|tonumber) end),p_codemagic_project_id:$codemagic_project_id,p_trigger_source:$trigger_source,p_status:$status,p_artifact_links:$artifact_links}')"
+
+            HTTP_CODE="$(curl -sS -o /tmp/orremote-ci-handoff-response.json -w '%{http_code}' -X POST "$ORREMOTE_CI_HANDOFF_URL" -H "apikey: $ORREMOTE_CI_PUBLISHABLE_KEY" -H "Content-Type: application/json" --data "$PAYLOAD" || true)"
+            cat /tmp/orremote-ci-handoff-response.json 2>/dev/null || true
+            if [ "$HTTP_CODE" -ge 200 ] 2>/dev/null && [ "$HTTP_CODE" -lt 300 ] 2>/dev/null; then
+              echo "Ø Remote CI handoff accepted (HTTP $HTTP_CODE)."
+            else
+              echo "Ø Remote CI handoff failed (HTTP ${HTTP_CODE:-unknown}); preserving original build result." >&2
+            fi
