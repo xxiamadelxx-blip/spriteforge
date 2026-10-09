@@ -14,9 +14,11 @@ const DEFAULT_LIMITS = Object.freeze({
 });
 const MAX_WAIT_MS = 2_000;
 const SESSION_RECOVERY_DELAY_MS = 100;
+// Two successive scoped observations must fit real Android/relay latency.
+// The old 3s default could admit one TRUE proof yet stop before the second.
 const DEFAULT_CONTRACTED_VERIFY = Object.freeze({
-  timeoutMs: 3_000,
-  pollMs: 250,
+  timeoutMs: 20_000,
+  pollMs: 500,
 });
 const MAX_CONTRACTED_VERIFY_OBSERVATIONS = 64;
 const DISPLAY_SCOPED_ACTION_PRIMITIVES = new Set([
