@@ -15,6 +15,10 @@ const ANDROID_TOOLS = new Set([
 ]);
 
 const ALLOWED_TOOLS = new Set([...ANDROID_TOOLS, 'skill.run']);
+// Only these two idempotent Android reads may be retried when a newly
+// authenticated phone socket supersedes the in-flight WSS session.
+// Never retry a write, screenshot/artifact operation, ambiguous timeout or skill.
+const SESSION_ROLLOVER_READ_ONLY = new Set(['screen.observe', 'app.list']);
 const CODEMAGIC_BUILD_URL = 'https://api.codemagic.io/builds';
 const CODEMAGIC_ALLOWED_BRANCH = 'ci/android-build';
 const RELEASE_TAG_PREFIX = 'refs/tags/orremote/android/';
@@ -278,6 +282,7 @@ export function createSupabaseCommandBus({
   async function processAndroidCommand(command) {
     const startedAtMs = performance.now();
     let transportMs = null;
+    let readOnlyRetryCount = 0;
     // Only allow an opaque UUID and the known tool name into timing logs.
     // Never log device/pair identifiers, request bodies, selectors or screen content.
     const commandId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(command.command_id || ''))
@@ -295,7 +300,7 @@ export function createSupabaseCommandBus({
           arguments: command.arguments || {},
         },
       });
-      const forwarded = await deviceRelay.forwardMcp({
+      const forward = () => deviceRelay.forwardMcp({
         deviceId: command.device_id,
         pairId: command.pair_id,
         traceId: commandId,
@@ -307,6 +312,20 @@ export function createSupabaseCommandBus({
         },
         body: requestBody,
       });
+      let forwarded;
+      try {
+        forwarded = await forward();
+      } catch (error) {
+        // A valid replacement authenticated WSS session caused the old request
+        // to be discarded. Bounded recovery is safe for explicit reads only.
+        // Other failure codes and all mutations remain no-blind-replay.
+        if (String(error?.code || '') !== 'SESSION_SUPERSEDED'
+            || !SESSION_ROLLOVER_READ_ONLY.has(command.tool_name)) {
+          throw error;
+        }
+        readOnlyRetryCount = 1;
+        forwarded = await forward();
+      }
       transportMs = Math.round(performance.now() - startedAtMs);
       await completeCommand(
         command.command_id,
@@ -317,6 +336,7 @@ export function createSupabaseCommandBus({
         outcome: 'completed',
         transport_ms: transportMs,
         persist_ms: Math.round(performance.now() - startedAtMs - transportMs),
+        ...(readOnlyRetryCount ? { read_only_retry_count: readOnlyRetryCount } : {}),
       });
     } catch (error) {
       const code = String(error?.code || '');
@@ -325,6 +345,7 @@ export function createSupabaseCommandBus({
         phase: transportMs === null ? 'transport' : 'persist',
         failure_code: ['DEVICE_OFFLINE', 'DEVICE_DISCONNECTED', 'DEVICE_TIMEOUT', 'SESSION_SUPERSEDED', 'DEVICE_SEND_FAILED'].includes(code) ? code : 'OTHER',
         elapsed_ms: Math.round(performance.now() - startedAtMs),
+        ...(readOnlyRetryCount ? { read_only_retry_count: readOnlyRetryCount } : {}),
       });
       throw error; // Existing fail-once / no-replay behavior is unchanged.
     }
