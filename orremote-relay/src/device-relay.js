@@ -26,21 +26,38 @@ function publicKeyObject(publicKeyDerBase64) {
 
 export function createDeviceRelay(config) {
   const pairingByCode = new Map();
+  const agentAuthorizationByCode = new Map();
   const connectedDevices = new Map();
   const pendingMcp = new Map();
   const lastEpochByDevice = new Map();
   const artifactBroker = createArtifactBroker(config);
   const wss = new WebSocketServer({ noServer: true, maxPayload: config.maxBodyBytes });
 
+  // Diagnostics only: correlate a server-side command UUID with WebSocket
+  // elapsed time. Never expose device IDs, pairing material or MCP payloads.
+  function recordM8Transport(pending, outcome) {
+    if (!pending?.traceId) return;
+    try {
+      console.info('Ø Remote M8 WSS timing', JSON.stringify({
+        command_id: pending.traceId,
+        outcome,
+        elapsed_ms: Math.round(performance.now() - pending.startedAtMs),
+      }));
+    } catch {}
+  }
+
   function createPairCode() {
     for (let i = 0; i < 20; i += 1) {
       const code = String(crypto.randomInt(0, 100_000_000)).padStart(8, '0');
-      if (!pairingByCode.has(code)) return code;
+      if (!pairingByCode.has(code) && !agentAuthorizationByCode.has(code)) return code;
     }
     throw new Error('could not allocate pair code');
   }
 
   function cleanupExpiredPairs() {
+    for (const [code, pending] of agentAuthorizationByCode) {
+      if (pending.expiresAt <= Date.now() || pending.ws.readyState !== WebSocket.OPEN) agentAuthorizationByCode.delete(code);
+    }
     const now = Date.now();
     for (const [code, value] of pairingByCode.entries()) {
       if (value.expiresAt <= now) pairingByCode.delete(code);
@@ -100,6 +117,7 @@ export function createDeviceRelay(config) {
       if (pending.deviceId !== deviceId) continue;
       clearTimeout(pending.timer);
       pendingMcp.delete(requestId);
+      recordM8Transport(pending, reason === 'SESSION_SUPERSEDED' ? 'session_superseded' : 'device_disconnected');
       pending.reject(relayError(reason, 503));
     }
     artifactBroker.cancelForDevice(deviceId, reason);
@@ -188,6 +206,29 @@ export function createDeviceRelay(config) {
       return;
     }
 
+    if (message.type === 'agent_authorization_request') {
+      // Only a physical phone action may initiate this message. The authenticated
+      // Keystore-backed socket binds the code to a single phone/session. No relay
+      // MCP API can request a consent code remotely.
+      const pairId = String(message.pair_id || '');
+      if (!state.pairedHint || !/^[A-Za-z0-9_-]{16,128}$/.test(pairId)) return;
+      cleanupExpiredPairs();
+      for (const [code, pending] of agentAuthorizationByCode) {
+        if (pending.deviceId === state.deviceId) agentAuthorizationByCode.delete(code);
+      }
+      const code = createPairCode();
+      agentAuthorizationByCode.set(code, {
+        deviceId: state.deviceId, pairId, ws,
+        expiresAt: Date.now() + config.pairTtlMs,
+      });
+      ws.send(JSON.stringify({
+        type: 'agent_authorization_code',
+        code,
+        expires_in_seconds: Math.floor(config.pairTtlMs / 1000),
+      }));
+      return;
+    }
+
     if (message.type === 'mcp_response') {
       const requestId = String(message.request_id || '');
       const pending = pendingMcp.get(requestId);
@@ -196,6 +237,7 @@ export function createDeviceRelay(config) {
       if (Number(message.session_epoch) !== state.sessionEpoch) return;
       clearTimeout(pending.timer);
       pendingMcp.delete(requestId);
+      recordM8Transport(pending, 'response');
       const body = typeof message.body === 'string' ? message.body : JSON.stringify(message.body ?? {});
       pending.resolve({
         status: Number(message.status || 200),
@@ -269,6 +311,9 @@ export function createDeviceRelay(config) {
       for (const [code, pending] of pairingByCode.entries()) {
         if (pending.ws === ws) pairingByCode.delete(code);
       }
+      for (const [code, pending] of agentAuthorizationByCode.entries()) {
+        if (pending.ws === ws) agentAuthorizationByCode.delete(code);
+      }
     });
     ws.on('error', () => {});
   });
@@ -294,6 +339,22 @@ export function createDeviceRelay(config) {
     }
   }, 25_000);
   heartbeat.unref();
+
+  function claimAgentAuthorization(code) {
+    cleanupExpiredPairs();
+    const key = String(code || '');
+    const pending = agentAuthorizationByCode.get(key);
+    if (!pending || pending.expiresAt <= Date.now()) return null;
+    const connection = connectedDevices.get(pending.deviceId);
+    if (!connection || connection.ws !== pending.ws
+        || pending.ws.readyState !== WebSocket.OPEN) return null;
+    agentAuthorizationByCode.delete(key);
+    return {
+      deviceId: pending.deviceId,
+      pairId: pending.pairId,
+      existingPairing: true,
+    };
+  }
 
   function claimPairing(code) {
     cleanupExpiredPairs();
@@ -347,7 +408,7 @@ export function createDeviceRelay(config) {
     };
   }
 
-  function forwardMcp({ deviceId, pairId, headers, body }) {
+  function forwardMcp({ deviceId, pairId, headers, body, traceId = null }) {
     const connection = connectedDevices.get(deviceId);
     if (!connection || connection.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(relayError('DEVICE_OFFLINE', 503));
@@ -355,15 +416,17 @@ export function createDeviceRelay(config) {
 
     const requestId = crypto.randomUUID();
     const epoch = connection.epoch;
+    const safeTraceId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(traceId || '')) ? traceId : null;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const pending = pendingMcp.get(requestId);
         if (!pending) return;
         pendingMcp.delete(requestId);
+        recordM8Transport(pending, 'timeout');
         reject(relayError('DEVICE_TIMEOUT', 504));
       }, config.mcpTimeoutMs);
 
-      pendingMcp.set(requestId, { resolve, reject, timer, deviceId, epoch });
+      pendingMcp.set(requestId, { resolve, reject, timer, deviceId, epoch, traceId: safeTraceId, startedAtMs: performance.now() });
       try {
         connection.ws.send(JSON.stringify({
           type: 'mcp_request',
@@ -375,7 +438,9 @@ export function createDeviceRelay(config) {
         }));
       } catch (error) {
         clearTimeout(timer);
+        const pending = pendingMcp.get(requestId);
         pendingMcp.delete(requestId);
+        recordM8Transport(pending, 'send_failed');
         reject(relayError(error?.message || 'DEVICE_SEND_FAILED', 503));
       }
     });
@@ -415,6 +480,8 @@ export function createDeviceRelay(config) {
   return {
     handleUpgrade,
     claimPairing,
+    claimAgentAuthorization,
+    pendingAgentAuthorizationCount: () => agentAuthorizationByCode.size,
     exchangePairCredential,
     verifyCapability,
     presence,

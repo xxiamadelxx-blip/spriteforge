@@ -41,6 +41,7 @@ test('Supabase command bus stays disabled when configuration is incomplete', asy
 test('claimed command forwards exact MCP request and completes once', async () => {
   const calls = [];
   const forwarded = [];
+  const metrics = [];
   const fetchImpl = fakeFetch([
     { rpc: 'orremote_claim_command', body: [{ command_id: '11111111-1111-4111-8111-111111111111', device_id: 'a'.repeat(24), pair_id: 'pair-generation-1234567890', tool_name: 'screen.observe', arguments: {} }] },
     { rpc: 'orremote_complete_command', body: true },
@@ -48,6 +49,7 @@ test('claimed command forwards exact MCP request and completes once', async () =
   const bus = createSupabaseCommandBus({
     config: configured(),
     fetchImpl,
+    onM8Metric: (metric) => metrics.push(metric),
     deviceRelay: {
       async forwardMcp(request) {
         forwarded.push(request);
@@ -66,6 +68,14 @@ test('claimed command forwards exact MCP request and completes once', async () =
   assert.deepEqual(body.params.arguments, {});
   assert.equal(calls.filter((c) => c.rpc === 'orremote_complete_command').length, 1);
   assert.equal(calls.filter((c) => c.rpc === 'orremote_fail_command').length, 0);
+  assert.equal(forwarded[0].traceId, '11111111-1111-4111-8111-111111111111');
+  assert.equal(metrics.length, 1);
+  assert.deepEqual(Object.keys(metrics[0]).sort(), ['command_id','tool','outcome','transport_ms','persist_ms'].sort());
+  assert.equal(metrics[0].outcome, 'completed');
+  assert.equal(metrics[0].tool, 'screen.observe');
+  assert.ok(metrics[0].transport_ms >= 0);
+  assert.ok(metrics[0].persist_ms >= 0);
+  assert.equal(JSON.stringify(metrics).includes('pair-generation'), false);
 });
 
 test('skill.run executes in relay and completes through the same command result RPC', async () => {
@@ -118,6 +128,7 @@ test('skill.run executes in relay and completes through the same command result 
 
 test('transport failure is recorded once and never replayed by processOnce', async () => {
   const calls = [];
+  const metrics = [];
   let forwarded = 0;
   let forwardedRequest = null;
   const fetchImpl = fakeFetch([
@@ -127,6 +138,7 @@ test('transport failure is recorded once and never replayed by processOnce', asy
   ], calls);
   const bus = createSupabaseCommandBus({
     config: configured(), fetchImpl,
+    onM8Metric: (metric) => metrics.push(metric),
     deviceRelay: { async forwardMcp(request) { forwardedRequest = request; forwarded += 1; const e = new Error('DEVICE_TIMEOUT'); e.code = 'DEVICE_TIMEOUT'; throw e; } },
   });
   assert.equal(await bus.processOnce(), 'failed');
@@ -134,6 +146,41 @@ test('transport failure is recorded once and never replayed by processOnce', asy
   assert.equal(forwarded, 1);
   assert.equal(JSON.parse(forwardedRequest.body).params.name, 'ui.editor_action');
   assert.equal(calls.filter((c) => c.rpc === 'orremote_fail_command').length, 1);
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].failure_code, 'DEVICE_TIMEOUT');
+  assert.equal(metrics[0].phase, 'transport');
+  assert.equal(metrics[0].command_id, '22222222-2222-4222-8222-222222222222');
+  assert.deepEqual(Object.keys(metrics[0]).sort(), ['command_id','tool','outcome','phase','failure_code','elapsed_ms'].sort());
+  assert.equal(JSON.stringify(metrics).includes('selector_value'), false);
+});
+
+test('diagnostic failure cannot alter command result or replay an action', async () => {
+  const calls = [];
+  let forwarded = 0;
+  const fetchImpl = fakeFetch([
+    { rpc: 'orremote_claim_command', body: [{
+      command_id: '55555555-5555-4555-8555-555555555555',
+      device_id: 'f'.repeat(24), pair_id: 'pair-generation-do-not-log',
+      tool_name: 'ui.click', arguments: { selector_value: 'PRIVATE_NODE_VALUE' },
+    }] },
+    { rpc: 'orremote_complete_command', body: true },
+    { rpc: 'orremote_claim_command', body: [] },
+  ], calls);
+  const bus = createSupabaseCommandBus({
+    config: configured(), fetchImpl,
+    onM8Metric() { throw new Error('broken metrics backend'); },
+    deviceRelay: {
+      async forwardMcp() {
+        forwarded += 1;
+        return { status: 200, body: JSON.stringify({ jsonrpc: '2.0', result: { status: 'OK' } }) };
+      },
+    },
+  });
+  assert.equal(await bus.processOnce(), 'completed');
+  assert.equal(await bus.processOnce(), 'idle');
+  assert.equal(forwarded, 1);
+  assert.equal(calls.filter((c) => c.rpc === 'orremote_complete_command').length, 1);
+  assert.equal(calls.filter((c) => c.rpc === 'orremote_fail_command').length, 0);
 });
 
 test('MCP authorization error body is preserved in completed result', async () => {
