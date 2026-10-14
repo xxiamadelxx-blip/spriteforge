@@ -71,6 +71,7 @@ export function createSupabaseCommandBus({
   deviceRelay,
   skillsRuntime = null,
   fetchImpl = fetch,
+  onM8Metric = (metric) => console.info('Ø Remote M8 bus timing', JSON.stringify(metric)),
 }) {
   const enabled = Boolean(
     config.supabaseUrl
@@ -247,31 +248,58 @@ export function createSupabaseCommandBus({
   }
 
   async function processAndroidCommand(command) {
-    const requestBody = JSON.stringify({
-      jsonrpc: '2.0',
-      id: `bus:${command.command_id}`,
-      method: 'tools/call',
-      params: {
-        name: command.tool_name,
-        arguments: command.arguments || {},
-      },
-    });
-    const forwarded = await deviceRelay.forwardMcp({
-      deviceId: command.device_id,
-      pairId: command.pair_id,
-      headers: {
-        'mcp-protocol-version': '2026-07-28',
-        'mcp-method': 'tools/call',
-        'mcp-name': command.tool_name,
-        'content-type': 'application/json',
-      },
-      body: requestBody,
-    });
-    await completeCommand(
-      command.command_id,
-      Number(forwarded.status || 200),
-      asObject(forwarded.body),
-    );
+    const startedAtMs = performance.now();
+    let transportMs = null;
+    // Only allow an opaque UUID and the known tool name into timing logs.
+    // Never log device/pair identifiers, request bodies, selectors or screen content.
+    const commandId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(command.command_id || ''))
+      ? String(command.command_id) : null;
+    const record = (metric) => {
+      try { onM8Metric?.({ command_id: commandId, tool: command.tool_name, ...metric }); } catch {}
+    };
+    try {
+      const requestBody = JSON.stringify({
+        jsonrpc: '2.0',
+        id: `bus:${command.command_id}`,
+        method: 'tools/call',
+        params: {
+          name: command.tool_name,
+          arguments: command.arguments || {},
+        },
+      });
+      const forwarded = await deviceRelay.forwardMcp({
+        deviceId: command.device_id,
+        pairId: command.pair_id,
+        traceId: commandId,
+        headers: {
+          'mcp-protocol-version': '2026-07-28',
+          'mcp-method': 'tools/call',
+          'mcp-name': command.tool_name,
+          'content-type': 'application/json',
+        },
+        body: requestBody,
+      });
+      transportMs = Math.round(performance.now() - startedAtMs);
+      await completeCommand(
+        command.command_id,
+        Number(forwarded.status || 200),
+        asObject(forwarded.body),
+      );
+      record({
+        outcome: 'completed',
+        transport_ms: transportMs,
+        persist_ms: Math.round(performance.now() - startedAtMs - transportMs),
+      });
+    } catch (error) {
+      const code = String(error?.code || '');
+      record({
+        outcome: 'failed',
+        phase: transportMs === null ? 'transport' : 'persist',
+        failure_code: ['DEVICE_OFFLINE', 'DEVICE_DISCONNECTED', 'DEVICE_TIMEOUT', 'SESSION_SUPERSEDED', 'DEVICE_SEND_FAILED'].includes(code) ? code : 'OTHER',
+        elapsed_ms: Math.round(performance.now() - startedAtMs),
+      });
+      throw error; // Existing fail-once / no-replay behavior is unchanged.
+    }
   }
 
   async function processOnce() {
