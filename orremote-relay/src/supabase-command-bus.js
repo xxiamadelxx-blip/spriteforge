@@ -83,9 +83,9 @@ export function createSupabaseCommandBus({
     && config.codemagicApiToken
     && config.releaseGithubToken,
   );
-  let timer = null;
   let stopped = false;
-  let running = false;
+  const laneTimers = new Map();
+  const activeLanes = new Set();
 
   function resolveSkillsRuntime() {
     return skillsRuntime || getRelaySkillsRuntime(deviceRelay);
@@ -93,16 +93,44 @@ export function createSupabaseCommandBus({
 
   async function rpc(name, body) {
     if (!enabled) throw new Error('SUPABASE_BUS_DISABLED');
-    const response = await fetchImpl(`${config.supabaseUrl}/rest/v1/rpc/${name}`, {
-      method: 'POST',
-      headers: {
-        apikey: config.supabasePublishableKey,
-        authorization: `Bearer ${config.supabasePublishableKey}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(body),
+    // A stalled claim/completion request must not block the command queue forever.
+    // Abort the transport AND race the deadline: injected fetch clients may ignore abort.
+    const configuredDeadline = Number(config.orremoteBusRpcTimeoutMs);
+    const deadlineMs = Number.isFinite(configuredDeadline) && configuredDeadline > 0
+      ? Math.min(30_000, Math.max(1, Math.floor(configuredDeadline)))
+      : 10_000;
+    const controller = new AbortController();
+    let timeoutHandle = null;
+    const deadline = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        controller.abort();
+        const error = new Error('SUPABASE_BUS_RPC_TIMEOUT');
+        error.code = 'SUPABASE_BUS_RPC_TIMEOUT';
+        reject(error);
+      }, deadlineMs);
     });
-    const text = await response.text();
+    let response;
+    let text;
+    try {
+      ({ response, text } = await Promise.race([
+        (async () => {
+          const result = await fetchImpl(`${config.supabaseUrl}/rest/v1/rpc/${name}`, {
+            method: 'POST',
+            headers: {
+              apikey: config.supabasePublishableKey,
+              authorization: `Bearer ${config.supabasePublishableKey}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
+          return { response: result, text: await result.text() };
+        })(),
+        deadline,
+      ]));
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
     let parsed = null;
     if (text) {
       try { parsed = JSON.parse(text); } catch { parsed = text; }
@@ -371,6 +399,7 @@ export function createSupabaseCommandBus({
     });
     if (!Array.isArray(rows) || rows.length === 0) return 'idle';
     const request = rows[0];
+    let acceptedBuildId = null;
 
     try {
       const branch = String(request.branch || '');
@@ -413,6 +442,7 @@ export function createSupabaseCommandBus({
         error.code = 'CODEMAGIC_BUILD_ID_MISSING';
         throw error;
       }
+      acceptedBuildId = buildId;
       await rpc('orremote_start_ci_request', {
         p_bus_secret: config.orremoteBusSecret,
         p_request_id: request.request_id,
@@ -420,6 +450,13 @@ export function createSupabaseCommandBus({
       });
       return 'started';
     } catch (error) {
+      if (acceptedBuildId) {
+        // Codemagic accepted the build. A lost Supabase handoff ACK is not
+        // evidence that the build failed; preserve the claimed record for
+        // explicit reconciliation instead of publishing a false failed state.
+        console.error('CI build accepted; Supabase start acknowledgement uncertain');
+        return 'handoff_ambiguous';
+      }
       await failCiRequest(request.request_id, error);
       return 'failed';
     }
@@ -432,6 +469,7 @@ export function createSupabaseCommandBus({
     });
     if (!Array.isArray(rows) || rows.length === 0) return 'idle';
     const request = rows[0];
+    let acceptedBuildId = null;
     try {
       const requestId = String(request.request_id || '');
       if (!requestId) {
@@ -486,6 +524,7 @@ export function createSupabaseCommandBus({
         error.code = 'CODEMAGIC_BUILD_ID_MISSING';
         throw error;
       }
+      acceptedBuildId = buildId;
       await rpc('orremote_start_release_build_request', {
         p_bus_secret: config.orremoteBusSecret,
         p_request_id: requestId,
@@ -495,59 +534,56 @@ export function createSupabaseCommandBus({
       });
       return 'started';
     } catch (error) {
+      if (acceptedBuildId) {
+        console.error('Release build accepted; Supabase start acknowledgement uncertain');
+        return 'handoff_ambiguous';
+      }
       await failReleaseBuildRequest(request.request_id, error);
       return 'failed';
     }
   }
 
-  function schedule(delay) {
-    if (!enabled || stopped) return;
-    timer = setTimeout(async () => {
-      if (running || stopped) return schedule(config.orremoteBusPollMs || 1000);
-      running = true;
-      let commandOutcome = 'idle';
-      let artifactOutcome = 'idle';
-      let ciOutcome = 'disabled';
-      let releaseBuildOutcome = 'disabled';
+  // Each queue has a serial worker, but no queue can block another queue.
+  // In particular, a hung artifact/CI request must never starve Android claims.
+  const lanes = [
+    { name: 'command', worker: processOnce, label: 'command' },
+    { name: 'artifact', worker: processArtifactOnce, label: 'artifact' },
+    { name: 'ci', worker: processCiOnce, label: 'CI' },
+    { name: 'release', worker: processReleaseBuildOnce, label: 'release build' },
+  ];
+
+  function scheduleLane(lane, delay) {
+    if (!enabled || stopped || laneTimers.has(lane.name) || activeLanes.has(lane.name)) return;
+    const timer = setTimeout(async () => {
+      laneTimers.delete(lane.name);
+      if (stopped || activeLanes.has(lane.name)) return;
+      activeLanes.add(lane.name);
+      let outcome = 'idle';
       try {
-        commandOutcome = await processOnce();
+        outcome = await lane.worker();
       } catch (error) {
-        console.error('Supabase command bus poll failed', error?.message || error);
-      }
-      try {
-        artifactOutcome = await processArtifactOnce();
-      } catch (error) {
-        console.error('Supabase artifact bus poll failed', error?.message || error);
-      }
-      try {
-        ciOutcome = await processCiOnce();
-      } catch (error) {
-        console.error('Supabase CI bus poll failed', error?.message || error);
-      }
-      try {
-        releaseBuildOutcome = await processReleaseBuildOnce();
-      } catch (error) {
-        console.error('Supabase release build poll failed', error?.message || error);
+        console.error(`Supabase ${lane.label} bus poll failed`, error?.message || error);
       } finally {
-        running = false;
+        activeLanes.delete(lane.name);
+        if (!stopped) {
+          const idle = outcome === 'idle' || outcome === 'disabled';
+          scheduleLane(lane, idle ? (config.orremoteBusPollMs || 1000) : 0);
+        }
       }
-      const ciIdle = ciOutcome === 'idle' || ciOutcome === 'disabled';
-      const releaseIdle = releaseBuildOutcome === 'idle' || releaseBuildOutcome === 'disabled';
-      const allIdle = commandOutcome === 'idle' && artifactOutcome === 'idle' && ciIdle && releaseIdle;
-      schedule(allIdle ? (config.orremoteBusPollMs || 1000) : 0);
     }, Math.max(0, delay));
+    laneTimers.set(lane.name, timer);
     timer.unref?.();
   }
 
   function start() {
-    if (!enabled || timer || stopped) return;
-    schedule(0);
+    if (!enabled || stopped) return;
+    for (const lane of lanes) scheduleLane(lane, 0);
   }
 
   function stop() {
     stopped = true;
-    if (timer) clearTimeout(timer);
-    timer = null;
+    for (const timer of laneTimers.values()) clearTimeout(timer);
+    laneTimers.clear();
   }
 
   return {
