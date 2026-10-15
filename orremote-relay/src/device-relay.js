@@ -4,6 +4,21 @@ import { createCredential, verifyCredential } from './credentials.js';
 import { createArtifactBroker } from './artifact-broker.js';
 import { shouldTerminateForStalePong } from './device-liveness.js';
 
+/** Only exact, matched read-only MCP calls get the longer response deadline. */
+export function selectDeviceMcpTimeoutMs({ config, headers, body }) {
+  const baseMs = config.mcpTimeoutMs;
+  const readOnlyMs = Math.max(baseMs, config.mcpReadOnlyTimeoutMs || 23_000);
+  if (headers?.['mcp-method'] !== 'tools/call') return baseMs;
+  try {
+    const request = JSON.parse(String(body || ''));
+    const name = request?.params?.name;
+    if (request?.method !== 'tools/call' || name !== headers?.['mcp-name']) return baseMs;
+    return name === 'screen.observe' || name === 'app.list' ? readOnlyMs : baseMs;
+  } catch {
+    return baseMs;
+  }
+}
+
 function relayError(code, status) {
   const error = new Error(code);
   error.code = code;
@@ -424,7 +439,7 @@ export function createDeviceRelay(config) {
         pendingMcp.delete(requestId);
         recordM8Transport(pending, 'timeout');
         reject(relayError('DEVICE_TIMEOUT', 504));
-      }, config.mcpTimeoutMs);
+      }, selectDeviceMcpTimeoutMs({ config, headers, body }));
 
       pendingMcp.set(requestId, { resolve, reject, timer, deviceId, epoch, traceId: safeTraceId, startedAtMs: performance.now() });
       try {
