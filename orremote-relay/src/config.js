@@ -28,6 +28,9 @@ export function loadConfig(env = process.env) {
     oauthIssuer: publicOrigin,
     relayTokenSecret,
     mcpTimeoutMs: positiveNumber(env.MCP_TIMEOUT_MS, 15_000),
+    // The Android localhost forwarder independently waits up to 15s for a reply.
+    // Allow safe reads a bounded tail so the outer relay does not time out first.
+    mcpReadOnlyTimeoutMs: positiveNumber(env.MCP_READ_ONLY_TIMEOUT_MS, 23_000),
     pairTtlMs: positiveNumber(env.PAIR_TTL_MS, 10 * 60 * 1000),
     pairCredentialTtlMs: positiveNumber(env.PAIR_CREDENTIAL_TTL_MS, 365 * 24 * 60 * 60 * 1000),
     capabilityTtlMs: positiveNumber(env.CAPABILITY_TTL_MS, 10 * 60 * 1000),
