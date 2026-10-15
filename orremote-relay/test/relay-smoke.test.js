@@ -324,3 +324,43 @@ test('stateless pairing survives restart, rejects stale epochs, and binds capabi
   }));
   assert.equal((await currentMcpPromise).status, 200);
 });
+
+
+test('read-only WSS reply may arrive after the old 2.5s relay deadline while a write still times out', { timeout: 20_000 }, async (t) => {
+  const port = 31_000 + crypto.randomInt(10_000);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const identity = deviceIdentity();
+  const relay = await startRelay(port, crypto.randomBytes(48).toString('base64url'));
+  let ws;
+  t.after(async () => {
+    try { ws?.close(); } catch {}
+    await stopRelay(relay);
+  });
+  const connection = await connectDevice(port, identity, false);
+  ws = connection.ws;
+  const q = connection.queue;
+  const epoch = await authenticate(ws, q, identity);
+  const pairingRequest = await q.next();
+  assert.equal(pairingRequest.type, 'pairing_required');
+  const pairing = await claimPairing(baseUrl, q, pairingRequest.code, identity.deviceId);
+  const token = await exchangeCapability(baseUrl, identity.deviceId, pairing.pair_token, pairing.pair_id);
+
+  const observationResponse = remoteMcp(baseUrl, identity.deviceId, token, 77, 'screen.observe');
+  const forwardedObservation = await q.next();
+  assert.equal(forwardedObservation.type, 'mcp_request');
+  assert.equal(JSON.parse(forwardedObservation.body).params.name, 'screen.observe');
+  await new Promise((resolve) => setTimeout(resolve, 2_850));
+  ws.send(JSON.stringify({
+    type: 'mcp_response',
+    request_id: forwardedObservation.request_id,
+    session_epoch: epoch,
+    status: 200,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 77, result: { isError: false } }),
+  }));
+  assert.equal((await observationResponse).status, 200, 'read response beyond 2.5s should still complete');
+
+  const writeResponse = remoteMcp(baseUrl, identity.deviceId, token, 78, 'ui.click');
+  const forwardedWrite = await q.next();
+  assert.equal(JSON.parse(forwardedWrite.body).params.name, 'ui.click');
+  assert.equal((await writeResponse).status, 504, 'writes retain old bounded 2.5s timeout');
+});
